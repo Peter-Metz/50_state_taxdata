@@ -2,6 +2,9 @@
 source(here::here("include", "libraries.r"))
 library(mvtnorm)
 
+devtools::session_info()
+(.packages()) %>% sort
+
 
 # define needed functions ----
 get_delta <- function(w, beta, x){
@@ -47,17 +50,16 @@ sigma
 set.seed(1234)
 x <- rmvnorm(n=h, mean=c(10, 20, 30), sigma)
 
+# get household-state weights if poisson model ----
+hsweights <- get_weights(beta, delta, x) # poisson model
+# end poisson ----
 
 # Alternatively, create a large problem ----
 # xscale <- 100 and step_scale <- nrow(x) works well with this
 h <- 40e3 # number households
-k <- 30 # number characteristics
-s <- 50 # number states
+k <- 30 # number of characteristics
+s <- 50 # number of states
 
-
-# get household-state weights if poisson model ----
-hsweights <- get_weights(beta, delta, x) # poisson model
-# end poisson ----
 
 #.. get household-state weights randomly IF not poisson ----
 set.seed(1234)
@@ -124,7 +126,7 @@ idist
 isse <- sum(idist^2)
 isse
  
-# before start, set values to use when entering loop for first time
+# before start, set values to use when entering loop for first time ----
 ebeta <- ibeta
 edelta <- idelta
 
@@ -152,14 +154,16 @@ for(i in 1:500){
   }
   
   # get the step
-  step <- matrix(nrow=s, ncol=k)
-  for(i in 1:s) step[i, ] <- t((1 /esweights[i]) * ixpx %*% dist[i, ]) * step_scale
+  # step <- matrix(nrow=s, ncol=k)
+  # for(i in 1:s) step[i, ] <- t((1 /esweights[i]) * ixpx %*% dist[i, ]) * step_scale
+  step <- (1/ esweights) * dist %*% ixpx * step_scale
   
   ebeta <- ebeta + step
   edelta <- get_delta(ehweights, ebeta, x)
 }
 b <- proc.time()
 b - a
+
 
 sum(dist^2)
 dist
