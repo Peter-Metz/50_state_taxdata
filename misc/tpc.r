@@ -62,8 +62,8 @@ hsweights <- get_weights(beta, delta, x) # poisson model
 
 # Alternatively, create a large problem ----
 # xscale <- 100 and step_scale <- nrow(x) works well with this
-h <- 40e3 # number households
-k <- 30 # number of characteristics
+h <- 400e3 # number households
+k <- 60 # number of characteristics
 s <- 50 # number of states
 
 
@@ -101,7 +101,9 @@ xsave <- x # save initial x values in case we scale them
 
 
 # scale and go ----
-xscale <- 100
+# xscale <- 10000 # need to get a rule of thumb for this
+xscale <- sum(xsave) / 1000
+
 x <- xsave / xscale
 
 targets <- t(hsweights) %*% x
