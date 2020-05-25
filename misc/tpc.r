@@ -2,7 +2,6 @@
 source(here::here("include", "libraries.r"))
 library(mvtnorm)
 
-<<<<<<< HEAD
 
 # define needed functions ----
 get_delta <- function(w, beta, x){
@@ -18,28 +17,14 @@ get_weights <- function(beta, delta, x){
   exp(beta_xd)
 }
 
-=======
->>>>>>> ac916ea2b2f63af4679647d64a1823ff69689c5a
+
 # create the poisson problem ----
 # xscale <- 10 and step_scale <- 10 works well with this
 h <- 10 # number households
 k <- 3 # number characteristics
 s <- 5 # number states
 
-# x is an h x k matrix of characteristics
-sigma <- matrix(c(1, .8, .6,
-                  .8, 1, .4,
-                  .6, .4, 1), ncol=3, byrow = TRUE)
-sigma
-
-<<<<<<< HEAD
-set.seed(1234)
-x <- rmvnorm(n=h, mean=c(10, 20, 30), sigma)
-
-=======
->>>>>>> ac916ea2b2f63af4679647d64a1823ff69689c5a
 # for the poisson version we need beta and delta
-
 # beta is an s x k matrix of coefficients
 beta <- matrix(c(1, 2, 3,
                  4, 5, 6,
@@ -50,77 +35,51 @@ beta
 
 # delta is an h-length vector of individual constants in the formula for state weights
 delta <- 1:h / 100
-<<<<<<< HEAD
-=======
 
 
+# create multivariate normal x for the 3-characteristics case ----
+# x is an h x k matrix of characteristics
+sigma <- matrix(c(1, .8, .6,
+                  .8, 1, .4,
+                  .6, .4, 1), ncol=3, byrow = TRUE)
+sigma
 
-# Alterantively, create a large problem ----
+set.seed(1234)
+x <- rmvnorm(n=h, mean=c(10, 20, 30), sigma)
+
+
+# Alternatively, create a large problem ----
 # xscale <- 100 and step_scale <- nrow(x) works well with this
 h <- 40e3 # number households
 k <- 30 # number characteristics
 s <- 50 # number states
 
-# alternative way to get x for large or small problem ----
-xbar <- seq(10, 100, length.out=k)
-xsd <- xbar / 10
 
-set.seed(1234)
-x <- matrix(rnorm(n=h * k, mean=xbar, sd=xsd), nrow=h, ncol=k)
-
-
-# look at x and its correlations ----
-x
-cor(x)
-
-
-# define needed functions ----
-get_delta <- function(w, beta, x){
-  beta_x <- exp(beta %*% t(x))
-  log(w / colSums(beta_x))
-}
->>>>>>> ac916ea2b2f63af4679647d64a1823ff69689c5a
-
-get_weights(beta, delta, x)
-
-
-<<<<<<< HEAD
-# Alterantively, create a large problem ----
-# xscale <- 100 and step_scale <- nrow(x) works well with this
-h <- 40e3 # number households
-k <- 30 # number characteristics
-s <- 50 # number states
-
-# alternative way to get x for large or small problem ----
-xbar <- seq(10, 100, length.out=k)
-xsd <- xbar / 10
-
-set.seed(1234)
-x <- matrix(rnorm(n=h * k, mean=xbar, sd=xsd), nrow=h, ncol=k)
-
-
-# look at x and its correlations ----
-x
-cor(x)
-
-
-=======
->>>>>>> ac916ea2b2f63af4679647d64a1823ff69689c5a
-# now define individual by state weights one of 2 ways ----
-# either from a poisson model, or randomly (especially for a large problem)
+# get household-state weights if poisson model ----
 hsweights <- get_weights(beta, delta, x) # poisson model
+# end poisson ----
 
-#.. randomly IF not poisson ----
+#.. get household-state weights randomly IF not poisson ----
 set.seed(1234)
 hsweights <- matrix(runif(n=h * s, min=4, max=8000), nrow=h, ncol=s)
-<<<<<<< HEAD
 #.. end random ----
-=======
->>>>>>> ac916ea2b2f63af4679647d64a1823ff69689c5a
 
+
+# alternative way to get x for large or small problem ----
+xbar <- seq(10, 100, length.out=k)
+xsd <- xbar / 10
+
+set.seed(1234)
+x <- matrix(rnorm(n=h * k, mean=xbar, sd=xsd), nrow=h, ncol=k)
+# end alternative way to get x ----
+
+# look at x and its correlations ----
+x
+cor(x)
+
+
+# get total household weights and state weights ----
 hsweights
-
-# get total 
 hweights <- rowSums(hsweights) # sum of weights for each individual
 hweights
 sweights <- colSums(hsweights) # sum of weights for each state
@@ -168,11 +127,9 @@ isse
 # before start, set values to use when entering loop for first time
 ebeta <- ibeta
 edelta <- idelta
-<<<<<<< HEAD
+
 # step_scale <- 1e4 # note that this has a MAJOR impact on iterations
-=======
-step_scale <- 1e4 # djb note that this has a MAJOR impact on iterations
->>>>>>> ac916ea2b2f63af4679647d64a1823ff69689c5a
+# step_scale <- 1e4 # djb note that this has a MAJOR impact on iterations
 step_scale <- nrow(x)
 
 a <- proc.time()
@@ -208,9 +165,13 @@ sum(dist^2)
 dist
 quantile(dist)
 
+# calculate final weights 
 fbeta <- ebeta
 fdelta <- edelta
 fhsweights <- get_weights(fbeta, fdelta, x)
+(fhweights <- rowSums(fhsweights))
+(fsweights <- colSums(fhsweights))
+
 
 fbeta %>% round(3)
 beta %>% round(3)
@@ -226,18 +187,16 @@ ihsweights %>% round(3)
 (fhsweights - hsweights) %>% round(6)
 fhsweights / hsweights
 fhsweights / ihsweights
-<<<<<<< HEAD
+
 quantile((fhsweights - hsweights) / hsweights * 100 - 100)
-=======
->>>>>>> ac916ea2b2f63af4679647d64a1823ff69689c5a
 
-rowSums(fhsweights)
+fhweights
 hweights
-(rowSums(fhsweights) / hweights * 100 - 100) %>% round(3)
+(fhweights / hweights * 100 - 100) %>% round(3)
 
-colSums(fhsweights)
+fsweights
 sweights
-(colSums(fhsweights) / sweights * 100 - 100) %>% round(3)
+(fsweights / sweights * 100 - 100) %>% round(3)
 
 
 t1 <- targets * xscale
@@ -248,7 +207,21 @@ t2 %>% round(3)
 (t2 / t1 * 100 - 100) %>% round(4)
 
 
-# regression
+# regression of initial household weights hweights on x variables
+mod <- glm(round(hweights) ~ x, family="poisson")
+summary(mod)
+summary(glm(round(hsweights[, 5]) ~ x, family="poisson")) # 4, 5 are poisson
+
+# poisson regressions with final estimated weights
+mod2 <- glm(round(fhweights) ~ x, family="poisson")
+summary(mod2)
+
+# now pick a state and estimate that model
+fhweights_s <- fhsweights[, 3]
+mod3 <- glm(round(fhweights_s) ~ x, family="poisson")
+summary(mod3)
+
+
 # y <- as.vector(hsweights) ...
 # x1 <- x
 # glm(formula = num_awards ~ prog + math, family = "poisson", data = p)
