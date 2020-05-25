@@ -1,0 +1,29 @@
+inputs_save <- inputs
+
+# examine and possibly revise inputs ----
+names(inputs)
+ht(inputs$cc_sparse)
+check <- check_constraints(inputs)
+check %>% arrange(desc(abs(pdiff)))
+
+check <- check %>%
+  mutate(clb2 <- ifelse(i==7, 10000, clb),
+         cub2 <- cub)
+
+
+inputs$clb <- check$clb2
+inputs$cub <- check$cub2
+
+check_constraints <- function(.inputs){
+  df <- .inputs$cc_sparse %>%
+    group_by(i, ctype, cname) %>%
+    summarise(conx0=sum(nzcc * .inputs$x0[j])) %>%
+    ungroup %>%
+    mutate(target=.inputs$constraints, clb=.inputs$clb, cub=.inputs$cub) %>%
+    select(i, ctype, cname, clb, target, cub, conx0) %>%
+    separate(cname, c("vname", "ftype", "stabbr"), remove=FALSE, fill="right") %>%
+    mutate(diff=conx0 - target, pdiff=diff / target * 100)
+  # mutate(diff=ifelse(conx0 > cub, conx0 - cub, clb - conx0),
+  #        diff=ifelse(conx0 > cub, conx0 - cub, clb - conx0))
+  df
+}
