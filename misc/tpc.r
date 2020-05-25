@@ -1,4 +1,10 @@
 
+# This program is based largely on the methodology in:
+#   Khitatrakun, Surachai, Gordon B T Mermin, and Norton Francis. “Incorporating State Analysis into the 
+#   Tax Policy Center’s Microsimulation Model: Documentation and Methodology.” Working Paper, March 2016.
+#   https://www.taxpolicycenter.org/sites/default/files/alfresco/publication-pdfs/2000697-Incorporating-State-Analysis-into-the-TPCs-Microsimulation-Model.pdf.
+
+
 source(here::here("include", "libraries.r"))
 library(mvtnorm)
 
