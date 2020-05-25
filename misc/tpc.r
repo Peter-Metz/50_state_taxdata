@@ -62,8 +62,8 @@ hsweights <- get_weights(beta, delta, x) # poisson model
 
 # Alternatively, create a large problem ----
 # xscale <- 100 and step_scale <- nrow(x) works well with this
-h <- 400e3 # number households
-k <- 60 # number of characteristics
+h <- 40e3 # number households
+k <- 30 # number of characteristics
 s <- 50 # number of states
 
 
@@ -101,8 +101,8 @@ xsave <- x # save initial x values in case we scale them
 
 
 # scale and go ----
-# xscale <- 10000 # need to get a rule of thumb for this
-xscale <- sum(xsave) / 1000
+# need to get a rule of thumb for this
+(xscale <- sum(xsave) / 1000)
 
 x <- xsave / xscale
 
@@ -116,7 +116,7 @@ targets
 xpx <- t(x) %*% x
 # inverse of matrix that has been multiplied by a non-zero scalar equals inverse of the scalar multiplied by inverse of the matrix,
 # so solve xpx once at the start
-(ixpx <- solve(xpx)) # this needs to be invertible
+(invxpx <- solve(xpx)) # this needs to be invertible
 # to get the inverse of the jacobian we will multiply by the inverse of the scalar
 
 
@@ -138,8 +138,7 @@ isse
 ebeta <- ibeta
 edelta <- idelta
 
-# step_scale <- 1e4 # note that this has a MAJOR impact on iterations
-# step_scale <- 1e4 # djb note that this has a MAJOR impact on iterations
+# note that step_scale has a MAJOR impact on iterations
 step_scale <- nrow(x)
 
 a <- proc.time()
@@ -163,8 +162,8 @@ for(i in 1:500){
   
   # get the step
   # step <- matrix(nrow=s, ncol=k)
-  # for(i in 1:s) step[i, ] <- t((1 /esweights[i]) * ixpx %*% dist[i, ]) * step_scale
-  step <- (1/ esweights) * dist %*% ixpx * step_scale
+  # for(i in 1:s) step[i, ] <- t((1 /esweights[i]) * invxpx %*% dist[i, ]) * step_scale
+  step <- (1/ esweights) * dist %*% invxpx * step_scale
   
   ebeta <- ebeta + step
   edelta <- get_delta(ehweights, ebeta, x)
