@@ -81,10 +81,10 @@ set.seed(1234)
 x <- matrix(rnorm(n=h * k, mean=xbar, sd=xsd), nrow=h, ncol=k)
 # end alternative way to get x ----
 
+
 # look at x and its correlations ----
 x
 cor(x)
-
 
 # get total household weights and state weights ----
 hsweights
@@ -140,7 +140,7 @@ ebeta <- ibeta
 edelta <- idelta
 
 # note that step_scale has a MAJOR impact on iterations
-step_scale <- nrow(x)
+(step_scale <- nrow(x))
 
 a <- proc.time()
 for(i in 1:500){
@@ -153,7 +153,7 @@ for(i in 1:500){
   sse <- sum(dist^2) # sum of squared errors
   sseu <- sse * (xscale ^2) # what the unscaled sse would be
   
-  if(sseu < 1e-4) {
+  if(sseu < 1e-6 | (sse < 1e-10 & sseu < 1e-2)) {
     print(sprintf("DONE at iteration %i: scaled sse: %.5e, unscaled sse: %.5e", i, sse, sseu))
     break
   }
@@ -165,7 +165,7 @@ for(i in 1:500){
   # get the step
   # step <- matrix(nrow=s, ncol=k)
   # for(i in 1:s) step[i, ] <- t((1 /esweights[i]) * invxpx %*% dist[i, ]) * step_scale
-  step <- (1/ esweights) * dist %*% invxpx * step_scale
+  step <- (1 / esweights) * dist %*% invxpx * step_scale
   
   ebeta <- ebeta + step
   edelta <- get_delta(ehweights, ebeta, x)
@@ -174,7 +174,7 @@ b <- proc.time()
 b - a
 
 
-sum(dist^2)
+sse; sseu
 dist
 quantile(dist)
 
