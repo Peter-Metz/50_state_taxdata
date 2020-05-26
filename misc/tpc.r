@@ -102,6 +102,7 @@ xsave <- x # save initial x values in case we scale them
 
 # scale and go ----
 # need to get a rule of thumb for this
+# xscale <- 1
 (xscale <- sum(xsave) / 1000)
 
 x <- xsave / xscale
@@ -149,15 +150,16 @@ for(i in 1:500){
   
   etargets <- t(ehsweights) %*% x
   dist <- targets - etargets
-  sse <- sum(dist^2) # a measure of error
+  sse <- sum(dist^2) # sum of squared errors
+  sseu <- sse * (xscale ^2) # what the unscaled sse would be
   
-  if(sse < 1e-8) {
-    print(sprintf("DONE at iteration %i: sse is %.5e", i, sse))
+  if(sseu < 1e-4) {
+    print(sprintf("DONE at iteration %i: scaled sse: %.5e, unscaled sse: %.5e", i, sse, sseu))
     break
   }
   
   if(i<=10 | i %% 5 ==0) {
-    print(sprintf("iteration %i: sse is %.5e", i, sse))
+    print(sprintf("iteration %i: scaled sse: %.5e, unscaled sse: %.5e", i, sse, sseu))
   }
   
   # get the step
