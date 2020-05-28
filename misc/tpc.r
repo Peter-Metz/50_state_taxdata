@@ -113,7 +113,7 @@ targets
 # now search for the beta coefficients and deltas that are consistent with these data and that meet the targets
 # we know the data and we know the aggregate weights, but not the state weights -- e prefix will mean estimated
 
-# define xprime-x and its inverse before entering the loop as it will not change within the loo9p
+# define xprime-x and its inverse before entering the loop as it will not change within the loop
 xpx <- t(x) %*% x
 # inverse of matrix that has been multiplied by a non-zero scalar equals inverse of the scalar multiplied by inverse of the matrix,
 # so solve xpx once at the start

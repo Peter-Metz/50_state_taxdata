@@ -139,6 +139,8 @@ target_incgroup <- 2 # define target income group
 
 possible_target_vars
 (target_vars <- possible_target_vars[c(1, 3, 6, 7)])
+target_vars <- possible_target_vars
+target_vars <- setdiff(possible_target_vars, c("pap_sum", "ssip_sum", "intp_sum", "otherincp_sumneg"))
 
 # define target values and states, for this income group
 targets_wide <- all_target_values %>%
@@ -198,7 +200,7 @@ check %>% arrange(desc(abs(pdiff)))
 opts <- list("print_level" = 0,
              "file_print_level" = 5, # integer
              "max_iter"= 100,
-             "linear_solver" = "ma77", # mumps pardiso ma27 ma57 ma77 ma86 ma97
+             "linear_solver" = "ma57", # mumps pardiso ma27 ma57 ma77 ma86 ma97
              # "ma57_automatic_scaling" = "yes", # if using ma57
              # "ma57_pre_alloc" = 3, # 1.05 is default; even changed, cannot allocate enough memory, however
              # "ma77_order" = "amd",  # metis; amd -- not clear which is faster
@@ -212,7 +214,7 @@ opts <- list("print_level" = 0,
              # "hessian_approximation" = "limited-memory", # KEEP default of exact
              # "derivative_test" = "first-order",
              # "derivative_test_print_all" = "yes",
-             "output_file" = here::here("out", "test77.out"))
+             "output_file" = here::here("out", "test57.out"))
 
 setwd(here::here("temp1"))
 getwd()
@@ -255,6 +257,11 @@ stub <- iweights %>%
   mutate(x=result$solution,
          weight=iweight_state * x)
 stub
+
+probs <- c(0, .01, .05, .1, .25, .5, .75, .9, .95, .99)
+quantile(stub$weight, probs) %>% round(3)
+sum(stub$weight)
+
 stub %>%
   group_by(pid) %>%
   summarise(weight_total=first(weight_total),
