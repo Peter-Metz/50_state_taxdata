@@ -7,10 +7,7 @@
 
 source(here::here("include", "libraries.r"))
 library(mvtnorm)
-
 library(numDeriv)
-grad(sin, pi)
-grad(get_weights, beta, delta, x)
 
 fvec <- function(betavec, wh, xmat, targets){
   beta <- matrix(betavec, nrow=nrow(targets), byrow=FALSE)

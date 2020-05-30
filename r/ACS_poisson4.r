@@ -23,52 +23,45 @@ dbox <- "C:/Users/donbo/Dropbox (Personal)/50state_taxdata/"
 
 # functions ----
 source(here::here("include", "functions_prep_dev.r")) # soon we will replace functions_prep.r with the dev version
-source(here::here("include", "functions_poisson_model.r"))
+source(here::here("include", "functions_poisson_model2.r"))
 
-get_delta <- function(wh, beta, x){
-  beta_x <- exp(beta %*% t(x))
-  log(wh / colSums(beta_x))
-}
 
-get_weights <- function(beta, delta, x){
-  # get all weights
-  beta_x <- beta %*% t(x)
-  # add delta to every row of beta_x and transpose
-  beta_xd <- apply(beta_x, 1 , function(m) m + delta) 
-  exp(beta_xd)
-}
+#.. poisson-related functions ----
 
-f <- function(betavec, wh, xmat, targets){
-  beta <- matrix(betavec, nrow=nrow(targets), byrow=FALSE)
-  delta <- get_delta(wh, beta, xmat)
-  whs <- get_weights(beta, delta, xmat)
-  etargets <- t(whs) %*% xmat
-  d <- targets - etargets
-  as.vector(d)
-}
 
-jac <- function(ewhs, xmatrix){
-  x2 <- xmatrix * xmatrix
-  ddiag <- - t(ewhs) %*% x2 # note the minus sign in front
-  diag(as.vector(ddiag)) 
-}
 
-get_result <- function(){
-  result <- list()
-  result$iter <- i
-  result$sse <- sse
-  result$d <- d
-  result$ebeta <- ebeta
-  result$edelta <- edelta
-  result$whs <- get_weights(ebeta, edelta, sxmat)
-  result$stargets <- stargets
-  result$etargets <- etargets
-  result
+
+#..functions to create problem of chosen size ----
+
+make_problem <- function(h, k, s){
+  # h: # of households
+  # k: # of characteristics per household
+  # s: # of states
+  
+  # returns a list with items created below
+  
+  # example call: make_problem(8, 2, 3)
+  
+  set.seed(1234)
+  x <- matrix(runif(h * k), nrow=h, byrow=TRUE)
+  
+  set.seed(1234)
+  whs <- matrix(runif(h * s, 10, 20), nrow=h, byrow=TRUE)
+  
+  wh=rowSums(whs)
+  ws=colSums(whs)
+  
+  targets <- t(whs) %*% x # s x k
+  
+  keepnames <- c("h", "k", "s", "x", "whs", "wh", "ws", "targets")
+  problem <- list()
+  for(var in keepnames) problem[[var]] <- get(var)
+  problem
 }
 
 
 # choose which file to use ----
-samp1 <- readRDS(here::here("data", fns[2])) %>% 
+samp1 <- readRDS(here::here("data", fns[1])) %>% 
   select(-nrecs, -pop) # note that we no longer need nrecs; pop ordinarily would not be in the data so drop here and create later
 glimpse(samp1)
 summary(samp1)
@@ -172,84 +165,48 @@ xmat <- samp %>% filter(incgroup==target_incgroup) %>% .[, target_vars] %>% as.m
 targets
 xmat
 
-
-stargets <- targets
-sxmat <- xmat
-
-# make a scale-factors vector so that max state value for each target var hits a scale goal
-scale_goal <- 1e3
-max_vals <- apply(targets, 2, max)
-scale_factor <- scale_goal / max_vals
-
-stargets <- sweep(targets, 2, scale_factor, "*")
-stargets
-sxmat <- sweep(xmat, 2, scale_factor, "*")
-sxmat
-
-xpx <- t(sxmat) %*% sxmat
-invxpx <- solve(xpx)
-
-# svars <- c("pincp_sum")
-# stargets[, svars] <- targets[, svars] / 10000
-# sxmat[, svars] <- xmat[, svars] / 10000
+pacs <- list()
+pacs$h <- nrow(xmat)
+pacs$k <- ncol(xmat)
+pacs$s <- nrow(targets)
+pacs$x <- xmat
+pacs$wh <- hweights
+pacs$targets <- targets
+pacs
 
 
-# stargets <- targets / 1000
-# sxmat <- xmat / 1000
+# SOLVE in loop ----
 
-beta0 <- matrix(0, nrow=nrow(stargets), ncol=ncol(stargets)) # tpc uses 0 as beta starting point
-delta0 <- get_delta(hweights, beta0, sxmat) # tpc uses initial delta based on initial beta 
 
-ebeta <- beta0 # tpc uses 0 as beta starting point
-edelta <- delta0 # tpc uses initial delta based on initial beta 
+p <- make_problem(h=8, k=2, s=3)
+p <- make_problem(h=100, k=5, s=10)
 
-maxiter <- 1000
-for(i in 1:maxiter){
-  ewhs <- get_weights(ebeta, edelta, sxmat)
-  ews <- colSums(ewhs)
-  ewh <- rowSums(ewhs)
-  
-  etargets <- t(ewhs) %*% sxmat
-  d <- stargets - etargets
-  sse <- sum(d^2)
-  if(i <=20 | i %% 20 ==0) print(sprintf("iteration %i:  sse: %.5e ", i, sse))
-  if(sse < 1e-6) {
-    # exit if good
-    result <- get_result()
-    break
-  }
-  
-  # jval <- jacobian(f, x=as.vector(ebeta), wh=wh, xmat=sxmat, targets=stargets, method="simple") # f is differences
-  # jval <- jac(ewhs, sxmat)
-  # step <- solve(jval) %*% as.vector(d) # , tol = 1e-30
-  # step <- matrix(step, nrow=nrow(d), byrow=FALSE)
-  
-  # ad hoc step
-  # step <- -(1 / ews) * d * 10 # nrow(sxmat) * .1 # %*% invxpx * 10000
-  step <- -(1 / ews) * d %*% invxpx * 4100
-  # step <- sweep(step, 2, colSums(step), "*")
-  
-  ebeta <- ebeta - step
-  edelta <- get_delta(ewh, ebeta, sxmat)
-  if(i==maxiter) {result <- get_result(); break}
-}
+res <- solve_poisson(p, step_scale = 100)
+res <- solve_poisson(pacs, step_scale=2e3)
 
+res <- solve_poisson(p, scale=TRUE, scale_goal = 100, step_scale=7)
+
+result <- res
+names(result)
 # str(result)
 result$iter
 result$sse
-result$d
-result$stargets
+result$sse_vec
+result$d %>% round(4)
+
+# check weights
+(result$ewh - result$problem_unscaled$wh) %>% round(2) # total household weights
+
+# check targets
 result$etargets
-(result$etargets / result$stargets * 100 - 100) %>% round(2)
+result$problem_unscaled$targets
+(result$etargets / result$problem_unscaled$targets * 100 - 100) %>% round(2)
 
 
-ftargets <- sweep(result$etargets, 2, scale_factor, "/")
-targets
-ftargets
-ftargets - targets
-round(ftargets / targets * 100 - 100, 4)
 
 
+
+# OTHER APPROACHES ----
 # nlm approach ----
 f_nlm <- function(betavec, wh, xmat, targets){
   sse_fn <- function(betavec, wh, xmat, targets){
