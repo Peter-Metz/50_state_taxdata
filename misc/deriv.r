@@ -187,3 +187,79 @@ df <- function(x, n){
 }
 dg <- Deriv(df)
 dg
+
+
+a <- expression(whs*xh)
+D()
+
+
+bx <- expression(xh * exp(b1*xh + c))
+Deriv(bx, "b1")
+
+e1 <- expression(whs * xh1 + whs * xh2)
+Deriv(e1, "whs")
+
+
+f1b <- function(x) exp(x)
+f1b <- expression(xh1k1*exp(xh1k1*b1 + xh1k2*b2))
+f1b <- expression(xh1k1*exp(xh1k1*b1 + xh1k2*b2 + c))
+# expression(xh1k1^2 * exp(b1 * xh1k1 + b2 * xh1k2 + c))
+Deriv(f1b, "b1")
+
+
+
+x <- c(5, 10)
+w <- 3
+xh <- c(11, 20)
+w %*% xh
+w * xh
+
+t <- c(200, 100)
+w <- c(1, 2, 3)
+xh <- matrix(c(11, 20, 
+               30, 15,
+               40, 10), ncol=2, byrow=TRUE)
+xh
+et <- w %*% xh
+et
+d <- t - et
+d
+
+# sk
+k <- 2
+s <- 3
+h <- 4
+ks <- k * s
+
+# s x k
+targs <- matrix(c(1, 2,
+                  3, 4,
+                  5, 6), ncol=k, byrow=TRUE)
+targs
+
+# h x s
+whs <- matrix(c(1, 2, 3,
+                4, 5, 6,
+                6, 7, 8,
+                9, 10, 11), ncol=s, byrow=TRUE)
+whs
+
+# 1 x h
+(wh <- rowSums(whs))
+# 1 x s
+(ws <- colSums(whs))
+
+xhs <- matrix(c(1, 2, 
+               3, 4,
+               5, 6,
+               7, 8), ncol=2, byrow=TRUE)
+xhs
+
+etargs <- t(whs) %*% xhs
+etargs
+
+
+dm <- targs - etargs
+dm
+
+

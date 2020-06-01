@@ -43,11 +43,14 @@ jac <- function(ewhs, xmatrix){
   diag(as.vector(ddiag)) 
 }
 
+vtom <- function(vec, nrows){
+  matrix(vec, nrow=nrows, byrow=FALSE)
+}
 
 distances <- function(betavec, wh, xmat, targets){
   # return a distance vector: differences between targets and corresponding
   # values calculated given a beta vector, household weights, and x matrix
-  beta <- matrix(betavec, nrow=nrow(targets), byrow=FALSE)
+  beta <- vtom(betavec, nrows=nrow(targets))
   delta <- get_delta(wh, beta, xmat)
   whs <- get_weights(beta, delta, xmat)
   etargets <- t(whs) %*% xmat
@@ -55,27 +58,64 @@ distances <- function(betavec, wh, xmat, targets){
   as.vector(d)
 }
 
-
-
-get_step <- function(){
-  fmin2 <- function(x0, f) {
-    x <- x0
-    while (sum(abs(gx)) > .01) {
-      gx <- grad(f, x)
-      x <- x - t(solve(numDeriv::hessian(func=f, x)) %*% gx)
-    }
-    x
-  }
+sse_fn <- function(betavec, wh, xmat, targets){
+  sum(distances(betavec, wh, xmat, targets)^2)
 }
 
-get_step(method){
-  step <- case_when(method=="adhoc" ~ step_adhoc(),
-                    TRUE ~ step_adhoc())
+
+
+step_inputs <- list()
+step_inputs$targets <- problem$targets
+step_inputs$wh <- problem$wh
+step_inputs$xmat <- problem$x
+
+step_fd <- function(ebeta, step_inputs){
+  # finite differences
+  bvec <- as.vector(ebeta)
+  gbeta <- numDeriv::grad(sse_fn, bvec,  wh=step_inputs$wh, xmat=step_inputs$xmat, targets=step_inputs$targets)
+  hbeta <- numDeriv::hessian(sse_fn, bvec,  wh=step_inputs$wh, xmat=step_inputs$xmat, targets=step_inputs$targets)
+  ihbeta <- solve(hbeta)
+  stepvec <- t(ihbeta %*% gbeta)
+  step <- vtom(stepvec, nrows=nrow(ebeta))
   step
 }
 
-solve_poisson <- function(problem, maxiter=100, scale=FALSE, scale_goal=1000, step_method="adhoc", step_scale=1, tol=1e-4){
+step_fd <- function(ebeta, step_inputs){
+  # finite differences -- version to print time
+  bvec <- as.vector(ebeta)
   t1 <- proc.time()
+  gbeta <- numDeriv::grad(sse_fn, bvec,  wh=step_inputs$wh, xmat=step_inputs$xmat, targets=step_inputs$targets)
+  t2 <- proc.time()
+  print(sprintf("gradient time in seconds: %.1e", (t2-t1)[3]))
+  hbeta <- numDeriv::hessian(sse_fn, bvec,  wh=step_inputs$wh, xmat=step_inputs$xmat, targets=step_inputs$targets)
+  t3 <- proc.time()
+  print(sprintf("hessian time in seconds: %.1e", (t3-t2)[3]))
+  ihbeta <- solve(hbeta)
+  t4 <- proc.time()
+  print(sprintf("inverse time in seconds: %.1e", (t4-t3)[3]))
+  stepvec <- t(ihbeta %*% gbeta)
+  step <- vtom(stepvec, nrows=nrow(ebeta))
+  step
+}
+
+
+step_adhoc <- function(ebeta, step_inputs){
+  -(1 / step_inputs$ews) * step_inputs$d %*% step_inputs$invxpx * step_inputs$step_scale
+}
+
+get_step <- function(step_method, ebeta, step_inputs){
+  step <- case_when(step_method=="adhoc" ~ step_adhoc(ebeta, step_inputs),
+                    step_method=="finite_diff" ~ step_fd(ebeta, step_inputs),
+                    TRUE ~ step_adhoc(ebeta, step_inputs))
+  step
+}
+
+solve_poisson <- function(problem, maxiter=100, scale=FALSE, scale_goal=1000, step_method="adhoc", step_scale=1, tol=1e-3, start=NULL){
+  t1 <- proc.time()
+  
+  if(step_method=="adhoc") step_fn <- step_adhoc else{
+    if(step_method=="finite_diff") step_fn <- step_fd
+  }
   
   init_step_scale <- step_scale
   
@@ -89,8 +129,9 @@ solve_poisson <- function(problem, maxiter=100, scale=FALSE, scale_goal=1000, st
   
   xpx <- t(xmat) %*% xmat
   invxpx <- solve(xpx) # TODO: add error check and exit if not invertible
-  
-  beta0 <- matrix(0, nrow=nrow(targets), ncol=ncol(targets)) # tpc uses 0 as beta starting point
+
+  if(is.null(start)) beta0 <- matrix(0, nrow=nrow(targets), ncol=ncol(targets)) else # tpc uses 0 as beta starting point
+    beta0 <- start
   delta0 <- get_delta(wh, beta0, xmat) # tpc uses initial delta based on initial beta 
   
   ebeta <- beta0 # tpc uses 0 as beta starting point
@@ -98,45 +139,67 @@ solve_poisson <- function(problem, maxiter=100, scale=FALSE, scale_goal=1000, st
 
   sse_vec <- rep(NA_real_, maxiter)
   
+  step_inputs <- list()
+  step_inputs$targets <- targets
+  step_inputs$step_scale <- step_scale
+  step_inputs$xmat <- xmat
+  step_inputs$invxpx <- invxpx
+  step_inputs$wh <- wh
+  
   for(iter in 1:maxiter){
     # iter <- iter + 1
     ewhs <- get_weights(ebeta, edelta, xmat)
     ews <- colSums(ewhs)
     ewh <- rowSums(ewhs)
+    step_inputs$ews <- ews
     
     etargets <- t(ewhs) %*% xmat
     d <- targets - etargets
+    step_inputs$d <- d
+    
     rel_err <- ifelse(targets==0, NA, abs(d / targets))
     max_rel_err <- max(rel_err, na.rm=TRUE)
     sse <- sum(d^2)
-    if(is.na(sse)) break
+    if(is.na(sse)) break # bad result, end it now, we have already saved the prior best result
+    
     sse_vec[iter] <- sse
+    # sse_vec <- c(seq(200, 100, -1), NA, NA)
+    sse_rel_change <- sse_vec / lag(sse_vec) - 1
+    # iter <- 5
+    # test2 <- ifelse(iter >= 5, !any(sse_rel_change[iter - 0:2] < -.01), FALSE)
+    # test2
+    # any(sse_rel_change[c(4, 5, 6)] < -.01)
+    
     best_sse <- min(sse_vec, na.rm=TRUE)
     if(sse==best_sse) best_ebeta <- ebeta
     prior_sse <- sse
+    
     if(iter <=20 | iter %% 20 ==0) print(sprintf("iteration: %i, sse: %.5e, max_rel_err: %.5e", iter, sse, max_rel_err))
+    
+    #.. stopping criteria ---- iter <- 5
+    test1 <- max_rel_err < tol # every distance from target is within our desired error tolerance
+    # test2: none the of last 3 iterations had sse improvement of 0.1% or more
+    test2 <- ifelse(iter >= 5, !any(sse_rel_change[iter - 0:2] < -.001), FALSE)
 
-    if(max_rel_err < tol) {
+    if(test1 | test2) {
       # exit if good
       print(sprintf("exit at iteration: %i, sse: %.5e, max_rel_err: %.5e", iter, sse, max_rel_err))
       break
     }
     
     # if sse is > prior sse, adjust step scale downward
-    if(sse > best_sse){
+    if(step_method=="adhoc" & (sse > best_sse)){
       step_scale <- step_scale * .5
-      ebeta <- prior_ebeta
+      ebeta <- best_ebeta # reset and try again
     }
     
     prior_ebeta <- ebeta
     
     # ad hoc step
-    step <- -(1 / ews) * d %*% invxpx * step_scale
-    
-    # jval <- jacobian(distances, x=as.vector(ebeta), wh=wh, xmat=xmat, targets=targets, method="simple") # f is differences
-    # jval <- jac(ewhs, xmat)
-    # step <- solve(jval) %*% as.vector(d) # , tol = 1e-30
-    # step <- matrix(step, nrow=nrow(d), byrow=FALSE)
+    # step <- -(1 / ews) * d %*% invxpx * step_scale
+    step_inputs$step_scale <- step_scale
+    step <- step_fn(ebeta, step_inputs) #  * (1 - iter /maxiter) # * step_scale # * (1 - iter /maxiter)
+    # print(step)
     
     ebeta <- ebeta - step
     edelta <- get_delta(ewh, ebeta, xmat)
@@ -155,5 +218,6 @@ solve_poisson <- function(problem, maxiter=100, scale=FALSE, scale_goal=1000, st
                  "problem_unscaled", "scale", "scale_goal", "init_step_scale", "final_step_scale")
   result <- list()
   for(var in keepnames) result[[var]] <- get(var)
+  print("all done")
   result
 }
