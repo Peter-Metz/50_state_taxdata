@@ -63,12 +63,6 @@ sse_fn <- function(betavec, wh, xmat, targets){
 }
 
 
-
-step_inputs <- list()
-step_inputs$targets <- problem$targets
-step_inputs$wh <- problem$wh
-step_inputs$xmat <- problem$x
-
 step_fd <- function(ebeta, step_inputs){
   # finite differences
   bvec <- as.vector(ebeta)

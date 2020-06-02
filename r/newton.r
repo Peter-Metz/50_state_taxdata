@@ -186,3 +186,31 @@ else
 end
 
 
+f <- function(xv){
+  sum(xv[1]^2 + xv[2]^2)
+}
+
+g <- function(xv){
+  c(2*xv[1], 2*xv[2])
+}
+
+h <- function(xv){
+  matrix(c(2, 0, 0, 2), ncol=2, byrow=TRUE)
+}
+
+xv <- c(300, -90)
+for(i in 1:10){
+  print(xv <- xv - solve(h(xv)) %*% g(xv) )
+}
+  
+}
+
+
+root <- function(g, gPrime, guess, tolerance) {
+  x <- guess
+  while (abs(g(x)) > tolerance) {
+    x = x - g(x) / gPrime(x)
+  }
+  x
+}
+
