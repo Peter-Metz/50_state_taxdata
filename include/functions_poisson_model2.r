@@ -1,8 +1,14 @@
 
-get_delta <- function(wh, beta, x){
-  beta_x <- exp(beta %*% t(x))
-  log(wh / colSums(beta_x))
+# delta, weights and vtom ----
+
+get_delta <- function(wh, beta, xmat){
+  # we cannot let beta %*% xmat get too large!! or exp will be Inf and problem will bomb
+  # it will get large when a beta element times an xmat element is large, so either
+  # beta or xmat can be the problem
+  beta_x <- exp(beta %*% t(xmat))
+  log(wh / colSums(beta_x)) # denominator is sum for each person
 }
+
 
 get_weights <- function(beta, delta, xmat){
   # get whs: state weights for households, given beta matrix, delta vector, and x matrix
@@ -12,10 +18,11 @@ get_weights <- function(beta, delta, xmat){
   exp(beta_xd)
 }
 
+
 scale_problem <- function(problem, scale_goal){
   # problem is a list with at least the following:
   #  targets
-  #  x
+  #  xmat
   # return:
   #   list with the scaled problem, including all of the original elements, plus
   #   scaled versions of x and targets
@@ -25,16 +32,109 @@ scale_problem <- function(problem, scale_goal){
   scale_factor <- scale_goal / max_targets
   
   scaled_targets <- sweep(problem$targets, 2, scale_factor, "*")
-  scaled_x <- sweep(problem$x, 2, scale_factor, "*")
+  scaled_x <- sweep(problem$xmat, 2, scale_factor, "*")
   
   scaled_problem <- problem
   scaled_problem$targets <- scaled_targets
-  scaled_problem$x <- scaled_x
+  scaled_problem$xmat <- scaled_x
   scaled_problem$scale_factor <- scale_factor
   
   scaled_problem
 }
 
+
+scale_problem_mdn <- function(problem, scale_goal){
+  # problem is a list with at least the following:
+  #  targets
+  #  xmat
+  # return:
+  #   list with the scaled problem, including all of the original elements, plus
+  #   scaled versions of x and targets
+  #   plus new items scale_goal and scale_factor
+  
+  mdn_targets <- apply(problem$targets, 2, median) # find median target in each row of the target matrix
+  scale_factor <- scale_goal / mdn_targets
+  
+  scaled_targets <- sweep(problem$targets, 2, scale_factor, "*")
+  scaled_x <- sweep(problem$xmat, 2, scale_factor, "*")
+  
+  scaled_problem <- problem
+  scaled_problem$targets <- scaled_targets
+  scaled_problem$xmat <- scaled_x
+  scaled_problem$scale_factor <- scale_factor
+  
+  scaled_problem
+}
+
+
+vtom <- function(vec, nrows){
+  # vector to matrix in the same ordering as a beta matrix
+  matrix(vec, nrow=nrows, byrow=FALSE)
+}
+
+
+# differences and sse ----
+
+diff_vec <- function(betavec, wh, xmat, targets){
+  # return a vector of differences between targets and corresponding
+  # values calculated given a beta vector, household weights, and x matrix
+  beta <- vtom(betavec, nrows=nrow(targets))
+  delta <- get_delta(wh, beta, xmat)
+  whs <- get_weights(beta, delta, xmat)
+  etargets <- t(whs) %*% xmat
+  d <- targets - etargets
+  as.vector(d)
+}
+
+
+sse_fn <- function(betavec, wh, xmat, targets){
+  # return a single value - sse (sum of squared errors)
+  sse <- sum(diff_vec(betavec, wh, xmat, targets)^2)
+  sse
+}
+
+
+# step functions ----
+step_fd <- function(ebeta, step_inputs){
+  # finite differences
+  bvec <- as.vector(ebeta)
+  gbeta <- numDeriv::grad(sse_fn, bvec,  wh=step_inputs$wh, xmat=step_inputs$xmat, targets=step_inputs$targets)
+  hbeta <- numDeriv::hessian(sse_fn, bvec,  wh=step_inputs$wh, xmat=step_inputs$xmat, targets=step_inputs$targets)
+  ihbeta <- solve(hbeta)
+  stepvec <- t(ihbeta %*% gbeta)
+  step <- vtom(stepvec, nrows=nrow(ebeta))
+  step
+}
+
+step_fd <- function(ebeta, step_inputs){
+  # finite differences -- version to print time
+  bvec <- as.vector(ebeta)
+  t1 <- proc.time()
+  gbeta <- numDeriv::grad(sse_fn, bvec,  wh=step_inputs$wh, xmat=step_inputs$xmat, targets=step_inputs$targets)
+  t2 <- proc.time()
+  print(sprintf("gradient time in seconds: %.1e", (t2-t1)[3]))
+  hbeta <- numDeriv::hessian(sse_fn, bvec,  wh=step_inputs$wh, xmat=step_inputs$xmat, targets=step_inputs$targets)
+  t3 <- proc.time()
+  print(sprintf("hessian time in seconds: %.1e", (t3-t2)[3]))
+  ihbeta <- solve(hbeta)
+  t4 <- proc.time()
+  print(sprintf("inverse time in seconds: %.1e", (t4-t3)[3]))
+  stepvec <- t(ihbeta %*% gbeta)
+  step <- vtom(stepvec, nrows=nrow(ebeta))
+  step
+}
+
+
+step_adhoc <- function(ebeta, step_inputs){
+  -(1 / step_inputs$ews) * step_inputs$d %*% step_inputs$invxpx * step_inputs$step_scale
+}
+
+get_step <- function(step_method, ebeta, step_inputs){
+  step <- case_when(step_method=="adhoc" ~ step_adhoc(ebeta, step_inputs),
+                    step_method=="finite_diff" ~ step_fd(ebeta, step_inputs),
+                    TRUE ~ step_adhoc(ebeta, step_inputs))
+  step
+}
 
 jac <- function(ewhs, xmatrix){
   # jacobian of distance vector relative to beta vector, IGNORING delta
@@ -44,38 +144,13 @@ jac <- function(ewhs, xmatrix){
 }
 
 
-distances <- function(betavec, wh, xmat, targets){
-  # return a distance vector: differences between targets and corresponding
-  # values calculated given a beta vector, household weights, and x matrix
-  beta <- matrix(betavec, nrow=nrow(targets), byrow=FALSE)
-  delta <- get_delta(wh, beta, xmat)
-  whs <- get_weights(beta, delta, xmat)
-  etargets <- t(whs) %*% xmat
-  d <- targets - etargets
-  as.vector(d)
-}
-
-
-
-get_step <- function(){
-  fmin2 <- function(x0, f) {
-    x <- x0
-    while (sum(abs(gx)) > .01) {
-      gx <- grad(f, x)
-      x <- x - t(solve(numDeriv::hessian(func=f, x)) %*% gx)
-    }
-    x
-  }
-}
-
-get_step(method){
-  step <- case_when(method=="adhoc" ~ step_adhoc(),
-                    TRUE ~ step_adhoc())
-  step
-}
-
-solve_poisson <- function(problem, maxiter=100, scale=FALSE, scale_goal=1000, step_method="adhoc", step_scale=1, tol=1e-4){
+# solve poisson problem ----
+solve_poisson <- function(problem, maxiter=100, scale=FALSE, scale_goal=1000, step_method="adhoc", step_scale=1, tol=1e-3, start=NULL){
   t1 <- proc.time()
+  
+  if(step_method=="adhoc") step_fn <- step_adhoc else{
+    if(step_method=="finite_diff") step_fn <- step_fd
+  }
   
   init_step_scale <- step_scale
   
@@ -85,12 +160,13 @@ solve_poisson <- function(problem, maxiter=100, scale=FALSE, scale_goal=1000, st
   # unbundle the problem list and create additional variables needed
   targets <- problem$targets
   wh <- problem$wh
-  xmat <- problem$x
+  xmat <- problem$xmat
   
   xpx <- t(xmat) %*% xmat
   invxpx <- solve(xpx) # TODO: add error check and exit if not invertible
-  
-  beta0 <- matrix(0, nrow=nrow(targets), ncol=ncol(targets)) # tpc uses 0 as beta starting point
+
+  if(is.null(start)) beta0 <- matrix(0, nrow=nrow(targets), ncol=ncol(targets)) else # tpc uses 0 as beta starting point
+    beta0 <- start
   delta0 <- get_delta(wh, beta0, xmat) # tpc uses initial delta based on initial beta 
   
   ebeta <- beta0 # tpc uses 0 as beta starting point
@@ -98,48 +174,70 @@ solve_poisson <- function(problem, maxiter=100, scale=FALSE, scale_goal=1000, st
 
   sse_vec <- rep(NA_real_, maxiter)
   
+  step_inputs <- list()
+  step_inputs$targets <- targets
+  step_inputs$step_scale <- step_scale
+  step_inputs$xmat <- xmat
+  step_inputs$invxpx <- invxpx
+  step_inputs$wh <- wh
+  
   for(iter in 1:maxiter){
     # iter <- iter + 1
+    edelta <- get_delta(wh, ebeta, xmat)
     ewhs <- get_weights(ebeta, edelta, xmat)
     ews <- colSums(ewhs)
     ewh <- rowSums(ewhs)
+    step_inputs$ews <- ews
     
     etargets <- t(ewhs) %*% xmat
     d <- targets - etargets
+    step_inputs$d <- d
+    
     rel_err <- ifelse(targets==0, NA, abs(d / targets))
     max_rel_err <- max(rel_err, na.rm=TRUE)
     sse <- sum(d^2)
-    if(is.na(sse)) break
+    if(is.na(sse)) break # bad result, end it now, we have already saved the prior best result
+    
     sse_vec[iter] <- sse
+    # sse_vec <- c(seq(200, 100, -1), NA, NA)
+    sse_rel_change <- sse_vec / lag(sse_vec) - 1
+    # iter <- 5
+    # test2 <- ifelse(iter >= 5, !any(sse_rel_change[iter - 0:2] < -.01), FALSE)
+    # test2
+    # any(sse_rel_change[c(4, 5, 6)] < -.01)
+    
     best_sse <- min(sse_vec, na.rm=TRUE)
     if(sse==best_sse) best_ebeta <- ebeta
     prior_sse <- sse
+    
     if(iter <=20 | iter %% 20 ==0) print(sprintf("iteration: %i, sse: %.5e, max_rel_err: %.5e", iter, sse, max_rel_err))
+    
+    #.. stopping criteria ---- iter <- 5
+    test1 <- max_rel_err < tol # every distance from target is within our desired error tolerance
+    # test2: none the of last 3 iterations had sse improvement of 0.1% or more
+    test2 <- ifelse(iter >= 5, !any(sse_rel_change[iter - 0:2] < -.001), FALSE)
 
-    if(max_rel_err < tol) {
+    if(test1 | test2) {
       # exit if good
       print(sprintf("exit at iteration: %i, sse: %.5e, max_rel_err: %.5e", iter, sse, max_rel_err))
       break
     }
     
     # if sse is > prior sse, adjust step scale downward
-    if(sse > best_sse){
+    if(step_method=="adhoc" & (sse > best_sse)){
       step_scale <- step_scale * .5
-      ebeta <- prior_ebeta
+      ebeta <- best_ebeta # reset and try again
     }
     
     prior_ebeta <- ebeta
     
     # ad hoc step
-    step <- -(1 / ews) * d %*% invxpx * step_scale
-    
-    # jval <- jacobian(distances, x=as.vector(ebeta), wh=wh, xmat=xmat, targets=targets, method="simple") # f is differences
-    # jval <- jac(ewhs, xmat)
-    # step <- solve(jval) %*% as.vector(d) # , tol = 1e-30
-    # step <- matrix(step, nrow=nrow(d), byrow=FALSE)
+    # step <- -(1 / ews) * d %*% invxpx * step_scale
+    step_inputs$step_scale <- step_scale
+    step <- step_fn(ebeta, step_inputs) #  * (1 - iter /maxiter) # * step_scale # * (1 - iter /maxiter)
+    # print(step)
     
     ebeta <- ebeta - step
-    edelta <- get_delta(ewh, ebeta, xmat)
   }
   
   best_edelta <- get_delta(ewh, best_ebeta, xmat)
@@ -155,5 +253,163 @@ solve_poisson <- function(problem, maxiter=100, scale=FALSE, scale_goal=1000, st
                  "problem_unscaled", "scale", "scale_goal", "init_step_scale", "final_step_scale")
   result <- list()
   for(var in keepnames) result[[var]] <- get(var)
+  print("all done")
   result
 }
+
+betavec <- sval
+set.seed(1234)
+betavec <- runif(p$s*p$k)
+
+betavec <- rep(0, p$s * p$k)
+targets <- p$targets
+xmat <- p$xmat
+wh <- p$wh
+
+grad_sse <- function(betavec, wh, xmat, targets){
+  # return gradient of the sse function wrt each beta
+  
+  # get the deltas as we will need them
+  beta <- vtom(betavec, nrows=nrow(targets))
+  delta <- get_delta(wh, beta, xmat)
+  
+  # make a data frame for each relevant variable, with h, k, and/or s indexes as needed
+  h <- nrow(xmat)
+  k <- ncol(xmat)
+  s <- nrow(targets)
+  
+  hstub <- tibble(h=1:h)
+  skstub <- expand_grid(s=1:s, k=1:k) %>% arrange(k, s)
+  hkstub <- expand_grid(h=1:h, k=1:k) %>% arrange(k, h)
+  
+  diffs <-diff_vec(betavec, wh, xmat, targets)
+  diffsdf <- skstub %>% mutate(diff=diffs)
+  
+  whdf <- hstub %>% mutate(wh=wh)
+  
+  xdf <- hkstub %>% mutate(x=as.vector(xmat))
+  
+  targdf <- skstub %>% mutate(target=as.vector(targets))
+  betadf <- skstub %>% mutate(beta=betavec)
+  deltadf <- hstub %>% mutate(delta=delta) 
+  
+  # now that the data are set up we are ready to calculate the gradient of the sse function
+  # break the calculation into pieces using first the chain rule and then the product rule
+
+  # sse = f(beta) = sum over targets [s,k] of (target - g(beta))^2
+  #   where g(beta[s,k]) = sum over h(ws[h] * x[h,k]) and ws[h] is the TPC formula
+  
+  # chain rule for grad, for each beta[s,k] (where gprime is the partial of g wrt beta[s,k]):
+  # = 2 * (target - g(beta)) * gprime(beta)
+  # = 2 * diffs * gprime(beta[s,k])
+  
+  # for a single target[s,k]:
+  #   g(beta)= weighted sum of X over hh, or sum[h] of X * exp(beta %*% X + delta[h]) where delta[h] is a function of all beta[s,k]
+  #     Re-express:
+  #          = sum[h] of X * exp(beta*X) * exp(delta[h]) # involving just the beta and x needed for this target
+  #      
+  #          = sum[h]  of X * a * b where a=exp(beta *X) and b=exp(delta[h]) and delta is a function of beta
+  
+  # product rule, still for a single target, gives:
+  #     gprime(beta)=sum[h] of X * (a * bprime + b * aprime)
+  
+  # a = exp(beta * x)
+  adf_base <- xdf %>%
+    left_join(betadf, by="k") %>%
+    mutate(a_exponent=beta * x) %>%
+    select(h, s, k, x, beta, a_exponent)
+  # adf_base %>% filter(h==1)
+  
+  adf <- adf_base %>%
+    group_by(s, h) %>%
+    summarise(a=exp(sum(a_exponent)), .groups="drop") %>% # these are the state weights for each hh BEFORE delta impact
+    select(h, s, a)
+  # adf %>% filter(h==1)
+  
+  #    aprime:
+  #      deriv of a=exp(beta * x) wrt beta is = x * a
+  # this is how much each hh's state weight will change if a beta changes, all else equal, BEFORE delta impact
+  aprimedf <- adf %>%
+    left_join(xdf, by="h") %>%
+    mutate(aprime=x * a) %>%
+    select(h, s, k, x, a, aprime) %>%
+    arrange(h, s, k)
+  # aprimedf %>% filter(h==1)
+  
+  # b = exp(delta[h])
+  bdf <- deltadf %>%
+    mutate(b=exp(delta))
+  
+  # check b: -- good
+  # bcheck <- adf %>%
+  #   left_join(whdf, by = "h") %>%
+  #   group_by(h) %>%
+  #   summarise(wh=first(wh), a=sum(a), .groups="drop") %>%
+  #   mutate(bcheck=wh / a)
+  
+  # bprimedf # do this for each hh for each target I think
+  # this is how much the delta impact will change if we change a beta - thus we have 1 per h, s, k
+  # delta =log(wh/log(sum[s] exp(betas*X))
+  # b=exp(delta(h))
+  # which is just b = wh / log(sum[s] exp(betas*X))
+  # bprime= for each h, for each beta (ie each s-k combination): (according to symbolic differentiation checks):
+  #   bprime =  - (wh * xk *exp(bs) / sum[s] exp(bs))^2  where bs is exp(BX) for just that S and just that h
+  # note that this bs is the same as a above: the sum, for an s-h combo, of exp(BX)
+  
+  # for each h, get the sum of their exp(beta * x) as it is a denominator; this is in adf
+  # adf %>% filter(h==1)
+  asums <- adf %>%
+    group_by(h) %>%
+    summarise(asum=sum(a), .groups="drop")
+  
+  bprimedf_base <- adf %>%
+    left_join(whdf, by = "h") %>%
+    left_join(xdf, by="h") %>%
+    left_join(asums, by="h") %>%
+    select(h, s, k, wh, x, a, asum)
+  # bprimedf_base %>% filter(h==1)
+  
+  bprimedf <- bprimedf_base %>%
+    mutate(bprime= -(wh * x * a / (asum^2)))
+  # bprimedf %>% filter(h==1)
+  
+  # now get gprime:
+  #     gprime(beta)=sum[h] of X * (a * bprime + b * aprime)
+  #  bprimedf has most of what we need
+  gprime_h <- bprimedf %>%
+    select(-a) %>% # drop a as it is also in aprime, below
+    left_join(bdf, by="h") %>%
+    left_join(aprimedf %>% select(-x), by = c("h", "s", "k")) %>% # drop x as it is in bprime
+    mutate(gprime_h=x * (a * bprime + b * aprime))
+  # gprime_h %>% filter(h==1)
+  
+  gprime <- gprime_h %>%
+    group_by(s, k) %>%
+    summarise(gprime=sum(gprime_h), .groups="drop") # sum over the households h
+  
+  # put it all together to get the gradient by s, k
+  # 2 * (target - g(beta)) * gprime(beta)    
+  graddf <- diffsdf %>%
+    left_join(gprime, by = c("s", "k")) %>%
+    mutate(grad=2 * diff * gprime) %>%
+    arrange(k, s)
+  
+  graddf$grad
+}
+
+
+
+sval <- 1
+sval <- 0
+sval <- rep(1, p$s * p$k)
+sval <- runif(p$s*p$k)
+
+sval <- rep(0, p$s * p$k)
+grad(sse_fn, x=sval, wh=p$wh, xmat=p$xmat, targets=p$target)
+grad_sse(sval, wh=p$wh, xmat=p$xmat, targets=p$targets)
+
+
+p <- make_problem(h=2, k=2, s=2)
+p <- make_problem(h=4, k=2, s=3)
+p <- make_problem(h=20, k=4, s=8)
+

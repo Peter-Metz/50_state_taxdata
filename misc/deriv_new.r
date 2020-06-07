@@ -1,32 +1,11 @@
-library(minpack.lm)
 
 
-# wh, n.beta, xhk
-(beta <- n.beta)
-xmat <- xhk
-get_delta(wh, n.beta, xhk)
+source(here::here("include", "libraries.r"))
+library(numDeriv) # grad, jacobian, and hessian
+library(ipoptr)
+library(nloptr)
+library(minpack.lm) # nls.lm 
 
-get_delta <- function(wh, beta, xmat){
-  # we cannot let beta %*% xmat get too large!! or exp will be Inf and problem will bomb
-  # it will get large when a beta element times an xmat element is large, so either
-  # beta or xmat can be the problem
-  beta_x <- exp(beta %*% t(xmat))
-  log(wh / colSums(beta_x)) # denominator is sum for each person
-}
-
-
-get_weights <- function(beta, delta, xmat){
-  # get whs: state weights for households, given beta matrix, delta vector, and x matrix
-  beta_x <- beta %*% t(xmat)
-  # add delta vector to every row of beta_x and transpose
-  beta_xd <- apply(beta_x, 1 , function(mat) mat + delta) 
-  exp(beta_xd)
-}
-
-
-vtom <- function(vec, nrows){
-  matrix(vec, nrow=nrows, byrow=FALSE)
-}
 
 
 f <- function(betavec, delta, wh, xmat, targets){

@@ -1,647 +1,258 @@
 
+# delta, weights and vtom ----
 
-# This program is based largely on the methodology in:
-#   Khitatrakun, Surachai, Gordon B T Mermin, and Norton Francis. “Incorporating State Analysis into the 
-#   Tax Policy Center’s Microsimulation Model: Documentation and Methodology.” Working Paper, March 2016.
-#   https://www.taxpolicycenter.org/sites/default/files/alfresco/publication-pdfs/2000697-Incorporating-State-Analysis-into-the-TPCs-Microsimulation-Model.pdf.
-
-
-calc_delta <- function(hh_weights, beta, xmatrix){
-  beta_x <- exp(beta %*% t(xmatrix))
-  log(hh_weights / colSums(beta_x))
+get_delta <- function(wh, beta, xmat){
+  # we cannot let beta %*% xmat get too large!! or exp will be Inf and problem will bomb
+  # it will get large when a beta element times an xmat element is large, so either
+  # beta or xmat can be the problem
+  beta_x <- exp(beta %*% t(xmat))
+  log(wh / colSums(beta_x)) # denominator is sum for each person
 }
 
 
-calc_weights <- function(beta, delta, xmatrix){
-  # calculate all weights
-  beta_x <- beta %*% t(xmatrix)
-  # add delta to every row of beta_x and transpose
-  beta_xd <- apply(beta_x, 1, function(mat) mat + delta) 
+get_weights <- function(beta, delta, xmat){
+  # get whs: state weights for households, given beta matrix, delta vector, and x matrix
+  beta_x <- beta %*% t(xmat)
+  # add delta vector to every row of beta_x and transpose
+  beta_xd <- apply(beta_x, 1 , function(mat) mat + delta) 
   exp(beta_xd)
 }
 
 
-poisson_weights2 <- function(hh_weights, targets, xmatrix, x_scale=NULL, step_scale=NULL, maxiter=200){
-  # function to solve for state weights for each household, so that:
-  #   (a) the weights for each state follow a poisson distribution
-  #   (b) the sum of weighted values for each state, for each household characteristic, equals or comes close to
-  #       the targets, and
-  #   (c) the sum of state weights for each household equals the total national weight for that household
+scale_problem <- function(problem, scale_goal){
+  # problem is a list with at least the following:
+  #  targets
+  #  xmat
+  # return:
+  #   list with the scaled problem, including all of the original elements, plus
+  #   scaled versions of x and targets
+  #   plus new items scale_goal and scale_factor
 
-  #. definitions ----
-  # s prefix means a variable is the scaled version of an input variable (multiplied by a scale factor)
-  # i prefix means a variable is an initial value set before iteration
-  # e prefix means a variable is an estimate developed during iteration
-  # f prefix means a variable is the final value, after iteration
-
-  # hh_weights:
-  #   vector of national weights (total weight for each household) -- one per household
-
-  # targets:
-  #   matrix of targets
-  #     1 row per state
-  #     1 column per characteristic
-
-  # xmatrix:
-  #   matrix of household characteristics (e.g., wages, interest, dividends)
-  #     1 row per household
-  #     1 column per characteristic
-
-
-  # scale parameters - to scale, we MULTIPLY by these values:
-  #   x_scale:      for scaling xmatrix and targets
-  #   step_scale:   for scaling the computed step size
-
-
-  #. initialization ----
-  t1 <- proc.time()
-
-  #.  . define indexes ----
-  n_states <- nrow(targets) # i.e., s
-  n_hh <- nrow(xmatrix) # number of households
-  n_characteristics <- ncol(xmatrix)
-
-  #.  . compute scaling factors ----
-  # to scale, we MULTIPLY by these values
-  if(is.null(x_scale)) x_scale <- 1000 / sum(xmatrix) # seems to be a good default value -- scaled x will sum to 1000
-  if(is.null(step_scale)) step_scale <- n_hh
-
-  #.  . scale the problem ----
-  s_xmatrix <- xmatrix * x_scale
-  s_targets <- targets * x_scale
-
-  #.  . compute inverse of xprime-x matrix ----
-  #   When we calculate search direction in the loop, we will need the inverse of a derivatives matrix that
-  #   involves the xprime-x matrix. Because the inverse of matrix that has been multiplied by a non-zero scalar equals
-  #   the inverse of the scalar multiplied by inverse of the matrix, we can calculate the inverse of xprime-x once
-  #   before entering the loop. Within the loop we will multiply by the inverse of the relevant scalar (computed in the loop).
-  xpx <- t(s_xmatrix) %*% s_xmatrix
-  invxpx <- solve(xpx) # TODO: add error check and exit if not invertible
-
-  #.  . define initial values ----
-  i_beta <- matrix(0, nrow=n_states, ncol=n_characteristics) # tpc uses 0 as beta starting point
-  i_delta <- calc_delta(hh_weights, i_beta, s_xmatrix) # tpc uses initial delta based on initial beta
-
-  i_hh_state_weights <- calc_weights(i_beta, i_delta, s_xmatrix)
-
-  i_dist <- s_targets - t(i_hh_state_weights) %*% s_xmatrix # distance from targets using initial values
-
-  i_sse <- sum(i_dist^2) # initial sum of squared distances
-
-  #.  . set estimated values used in loop to intial values, before entering loop for first time ----
-  e_beta <- i_beta
-  e_delta <- i_delta
-
-  # begin iterations ----
-  t2 <- proc.time()
-  for(i in 1:maxiter){
-    # iterate, searching for best beta and delta coefficients for the poisson model
-
-    e_hh_state_weights <- calc_weights(e_beta, e_delta, s_xmatrix) # estimated weights for each household for each state
-    e_hh_weights <- rowSums(e_hh_state_weights) # estimated total weights for each households
-    e_state_weights <- colSums(e_hh_state_weights) # estimated total weights for each state
-
-    e_targets <- t(e_hh_state_weights) %*% s_xmatrix
-    dist <- s_targets - e_targets # distance from scaled targets
-    dist_u <- dist / x_scale
-    sse <- sum(dist^2) # sum of squared errors
-    # print(sse)
-    # sse <- 1; sseu <- 1
-    sseu <- sse
-    sseu <- sse * (x_scale^-2) # unscaled sse
-    maxdist <- max(abs(rowSums(dist_u)))
-
-    # if(sseu < 1e-6 | (sse < 1e-10 & sseu < 1e-2)) {
-    #   print(sprintf("DONE at iteration %i: scaled sse: %.5e, unscaled sse: %.5e", i, sse, sseu))
-    #   break
-    # }
-
-    if(maxdist < 500) {
-      print(sprintf("DONE at iteration %i: max error: %.5e", i, maxdist))
-      break
-    }
-
-    if(i <= 10 | (i %% 10)==0) {
-      print(sprintf("iteration %i: scaled sse: %.5e, unscaled sse: %.5e max error: %.5e", i, sse, sseu, maxdist))
-    }
-
-    step <- (1 / e_state_weights) * dist %*% invxpx * step_scale # get the step (search direction)
-
-    e_beta <- e_beta + step
-    e_delta <- calc_delta(e_hh_weights, e_beta, s_xmatrix)
-  }
-  t3 <- proc.time()
-  # after we exit the loop, e_beta and e_delta have the desired coefficients
-
-  # post-loop: calculate weights and return results ----
-  f_beta <- e_beta
-  f_delta <- e_delta
-  f_hh_state_weights <- calc_weights(f_beta, f_delta, s_xmatrix)
-  f_hh_weights <- rowSums(f_hh_state_weights)
-  f_state_weights <- colSums(f_hh_state_weights)
-  f_targets <- (t(f_hh_state_weights) %*% s_xmatrix) / x_scale
-
-  result <- list()
-  result$iterations <- i
-  result$unscaled_sse <- sseu
-
-  vars <- c("x_scale", "step_scale", "maxdist",
-            "f_beta", "f_delta", "f_hh_state_weights",
-            "f_hh_weights", "f_targets",
-            "hh_weights", "targets", "xmatrix")
-  for(var in vars) result[[var]] <- get(var)
-  t4 <- proc.time()
-  result$total_seconds <- as.numeric((t4 - t1)[3])
-  result$iter_seconds <- as.numeric((t3 - t2)[3])
-
-  return(result)
+  max_targets <- apply(problem$targets, 2, max) # find max target in each row of the target matrix
+  scale_factor <- scale_goal / max_targets
+  
+  scaled_targets <- sweep(problem$targets, 2, scale_factor, "*")
+  scaled_x <- sweep(problem$xmat, 2, scale_factor, "*")
+  
+  scaled_problem <- problem
+  scaled_problem$targets <- scaled_targets
+  scaled_problem$xmat <- scaled_x
+  scaled_problem$scale_factor <- scale_factor
+  
+  scaled_problem
 }
 
 
-
-
-poisson_weights <- function(hh_weights, targets, xmatrix, maxiter=200, x_scalefactor=1000, 
-                            step_start=nrow(xmatrix), step_stop=1000, step_iter=100){
-  # function to solve for state weights for each household, so that:
-  #   (a) the weights for each state follow a poisson distribution
-  #   (b) the sum of weighted values for each state, for each household characteristic, equals or comes close to
-  #       the targets, and
-  #   (c) the sum of state weights for each household equals the total national weight for that household
+scale_problem_mdn <- function(problem, scale_goal){
+  # problem is a list with at least the following:
+  #  targets
+  #  xmat
+  # return:
+  #   list with the scaled problem, including all of the original elements, plus
+  #   scaled versions of x and targets
+  #   plus new items scale_goal and scale_factor
   
-  #. definitions ----
-  # s prefix means a variable is the scaled version of an input variable (multiplied by a scale factor)
-  # i prefix means a variable is an initial value set before iteration
-  # e prefix means a variable is an estimate developed during iteration
-  # f prefix means a variable is the final value, after iteration
+  mdn_targets <- apply(problem$targets, 2, median) # find median target in each row of the target matrix
+  scale_factor <- scale_goal / mdn_targets
   
-  # hh_weights:
-  #   vector of national weights (total weight for each household) -- one per household
+  scaled_targets <- sweep(problem$targets, 2, scale_factor, "*")
+  scaled_x <- sweep(problem$xmat, 2, scale_factor, "*")
   
-  # targets:
-  #   matrix of targets
-  #     1 row per state
-  #     1 column per characteristic
+  scaled_problem <- problem
+  scaled_problem$targets <- scaled_targets
+  scaled_problem$xmat <- scaled_x
+  scaled_problem$scale_factor <- scale_factor
   
-  # xmatrix:
-  #   matrix of household characteristics (e.g., wages, interest, dividends)
-  #     1 row per household
-  #     1 column per characteristic
-  
-  
-  # scale parameters - to scale, we MULTIPLY by these values:
-  #   x_scale:      for scaling xmatrix and targets
-  #   step_scale:   for scaling the computed step size
-  
-  
-  #. initialization ----
-  t1 <- proc.time()
-  
-  #.  . define indexes ----
-  n_states <- nrow(targets) # i.e., s
-  n_hh <- nrow(xmatrix) # number of households
-  n_characteristics <- ncol(xmatrix)
-  
-  #.  . compute scaling factors ----
-  # to scale, we MULTIPLY by these values
-  # if(is.null(x_scale)) x_scale <- 1000 / sum(xmatrix) # seems to be a good default value -- scaled x will sum to 1000
-  # create xscale vector so that each target is calibrarted to 1000
-  # x_scale <- ifelse(targets==0, 0, 10000 / targets)
-  x_scale <- ifelse(colSums(targets)==0, 1, x_scalefactor / colSums(targets))
-  # print(x_scale)
-  # x_scale <- c(10, 1, 1, 1)
-  
-  # if(is.null(step_scale)) step_scale <- n_hh * .8
-  steps <- rep(step_stop, maxiter)
-  isteps <- min(step_iter, maxiter)
-  steps[1:isteps] <- seq(step_start, step_stop, length.out = isteps)
-  # print(steps)
-  
-  #.  . scale the problem ----
-  s_xmatrix <-sweep(xmatrix, 2, x_scale, FUN = "*") # efficient way to multiply each row of matrix by a vector
-  s_targets <- sweep(targets, 2, x_scale, FUN = "*")
-  # s_targets <- ifelse(s_targets==0, 1, s_targets)
-  # print(x_scale)
-  # print(s_targets)
-  # targets * x_scale
-  
-  #.  . compute inverse of xprime-x matrix ----
-  #   When we calculate search direction in the loop, we will need the inverse of a derivatives matrix that 
-  #   involves the xprime-x matrix. Because the inverse of matrix that has been multiplied by a non-zero scalar equals 
-  #   the inverse of the scalar multiplied by inverse of the matrix, we can calculate the inverse of xprime-x once
-  #   before entering the loop. Within the loop we will multiply by the inverse of the relevant scalar (computed in the loop).
-  xpx <- t(s_xmatrix) %*% s_xmatrix
-  invxpx <- solve(xpx) # TODO: add error check and exit if not invertible
-  
-  #.  . define initial values ----
-  i_beta <- matrix(0, nrow=n_states, ncol=n_characteristics) # tpc uses 0 as beta starting point
-  i_delta <- calc_delta(hh_weights, i_beta, s_xmatrix) # tpc uses initial delta based on initial beta 
-  
-  i_hh_state_weights <- calc_weights(i_beta, i_delta, s_xmatrix)
-  
-  i_dist <- s_targets - t(i_hh_state_weights) %*% s_xmatrix # distance from targets using initial values
-  
-  i_sse <- sum(i_dist^2) # initial sum of squared distances
-  
-  #.  . set estimated values used in loop to intial values, before entering loop for first time ----
-  e_beta <- i_beta
-  e_delta <- i_delta
-  
-  # begin iterations ----
-  t2 <- proc.time()
-  for(i in 1:maxiter){
-    # iterate, searching for best beta and delta coefficients for the poisson model 
-    
-    # if(i==4){
-    #   print("last step:")
-    #   print(step)
-    #   print(e_beta)
-    #   print(e_delta)
-    #   print(s_targets)
-    #   print(e_targets)
-    #   print(dist) 
-    #   print(pdist)
-    # }
-    
-    e_hh_state_weights <- calc_weights(e_beta, e_delta, s_xmatrix) # estimated weights for each household for each state
-    e_hh_weights <- rowSums(e_hh_state_weights) # estimated total weights for each households
-    e_state_weights <- colSums(e_hh_state_weights) # estimated total weights for each state
-    
-    e_targets <- t(e_hh_state_weights) %*% s_xmatrix
-    dist <- e_targets - s_targets # distance from scaled targets
-    # print(dist)
-    # dist_u <- dist / x_scale
-    dist_u <- dist
-    pdist <- ifelse(s_targets==0, 1, dist / s_targets)
-
-    sse <- sum(dist^2) # sum of squared errors
-    # print(sse)
-    # sse <- 1; sseu <- 1
-    sseu <- sse
-    # sseu <- sse * (x_scale^-2) # unscaled sse
-    maxdist <- max(abs(pdist))
-    # if(i==5) print(pdist)
-    
-
-    # step_scale <- max(n_hh * .75 * (1 - (i / step_scalefactor)/(100)), 100)
-    # step_scale <- ifelse(i < step_iter, step_start - (step_start - step_stop) * i / step_iter, step_stop)
-    step_scale <- steps[i]
-    
-    # if(sseu < 1e-6 | (sse < 1e-10 & sseu < 1e-2)) {
-    #   print(sprintf("DONE at iteration %i: scaled sse: %.5e, unscaled sse: %.5e", i, sse, sseu))
-    #   break
-    # }
-    
-    # if(maxdist < 1e-2) {
-    #   print(sprintf("DONE at iteration %i: max error: %.5e", i, maxdist))
-    #   break
-    # }
-    
-    if(i <= 10 | (i %% 10)==0) {
-      print(sprintf("iteration %i: scaled sse: %.5e, unscaled sse: %.5e max error: %.5e step scale: %.5e", i, sse, sseu, maxdist, step_scale))
-    }
-    
-    # step <- (1 / e_state_weights) * dist %*% invxpx * step_scale # get the step (search direction)
-    # step <- (1 / e_state_weights) * dist %*% invxpx * step_scale  # get the step (search direction)
-    step <- (1 / e_state_weights) * dist %*% invxpx * 7000 # get the step (search direction)
-    # step <- ifelse(is.infinite(step), 0, step)
-    # print("e_state_weights"); print(e_state_weights)
-    # print("dist"); print(dist)
-    # print("step"); print(step)
-    
-    e_beta <- e_beta + step
-    e_delta <- calc_delta(e_hh_weights, e_beta, s_xmatrix)
-  }
-  t3 <- proc.time()
-  # after we exit the loop, e_beta and e_delta have the desired coefficients
-  
-  # post-loop: calculate weights and return results ----
-  f_beta <- e_beta
-  f_delta <- e_delta
-  f_hh_state_weights <- calc_weights(f_beta, f_delta, s_xmatrix)
-  f_hh_weights <- rowSums(f_hh_state_weights)
-  f_state_weights <- colSums(f_hh_state_weights)
-  f_s_targets <- t(f_hh_state_weights) %*% s_xmatrix
-  f_targets <- sweep((t(f_hh_state_weights) %*% s_xmatrix), 2, x_scale, FUN = "/")
-  
-  result <- list()
-  result$iterations <- i
-  result$unscaled_sse <- sseu
-  
-  vars <- c("x_scale", "step_scale", "maxdist",
-            "f_beta", "f_delta", "f_hh_state_weights",
-            "f_hh_weights", "targets", "f_targets",
-            "hh_weights", "xmatrix", "f_s_targets", "s_targets")
-  for(var in vars) result[[var]] <- get(var)
-  t4 <- proc.time()
-  result$total_seconds <- as.numeric((t4 - t1)[3])
-  result$iter_seconds <- as.numeric((t3 - t2)[3])
-  
-  return(result)
+  scaled_problem
 }
 
 
+vtom <- function(vec, nrows){
+  # vector to matrix in the same ordering as a beta matrix
+  matrix(vec, nrow=nrows, byrow=FALSE)
+}
 
 
-poisson_weights3 <- function(hh_weights, targets, xmatrix, maxiter=200,
-                             x_scale=NULL, 
-                             step_start, step_stop, step_iter){
-  # function to solve for state weights for each household, so that:
-  #   (a) the weights for each state follow a poisson distribution
-  #   (b) the sum of weighted values for each state, for each household characteristic, equals or comes close to
-  #       the targets, and
-  #   (c) the sum of state weights for each household equals the total national weight for that household
-  
-  #. definitions ----
-  # s prefix means a variable is the scaled version of an input variable (multiplied by a scale factor)
-  # i prefix means a variable is an initial value set before iteration
-  # e prefix means a variable is an estimate developed during iteration
-  # f prefix means a variable is the final value, after iteration
-  
-  # hh_weights:
-  #   vector of national weights (total weight for each household) -- one per household
-  
-  # targets:
-  #   matrix of targets
-  #     1 row per state
-  #     1 column per characteristic
-  
-  # xmatrix:
-  #   matrix of household characteristics (e.g., wages, interest, dividends)
-  #     1 row per household
-  #     1 column per characteristic
-  
-  
-  # scale parameters - to scale, we MULTIPLY by these values:
-  #   x_scale:      for scaling xmatrix and targets
-  #   step_scale:   for scaling the computed step size
-  
-  
-  #. initialization ----
+# differences and sse ----
+
+diff_vec <- function(betavec, wh, xmat, targets){
+  # return a vector of differences between targets and corresponding
+  # values calculated given a beta vector, household weights, and x matrix
+  beta <- vtom(betavec, nrows=nrow(targets))
+  delta <- get_delta(wh, beta, xmat)
+  whs <- get_weights(beta, delta, xmat)
+  etargets <- t(whs) %*% xmat
+  d <- targets - etargets
+  as.vector(d)
+}
+
+
+sse_fn <- function(betavec, wh, xmat, targets){
+  # return a single value - sse (sum of squared errors)
+  sse <- sum(diff_vec(betavec, wh, xmat, targets)^2)
+  sse
+}
+
+
+# step functions ----
+step_fd <- function(ebeta, step_inputs){
+  # finite differences
+  bvec <- as.vector(ebeta)
+  gbeta <- numDeriv::grad(sse_fn, bvec,  wh=step_inputs$wh, xmat=step_inputs$xmat, targets=step_inputs$targets)
+  hbeta <- numDeriv::hessian(sse_fn, bvec,  wh=step_inputs$wh, xmat=step_inputs$xmat, targets=step_inputs$targets)
+  ihbeta <- solve(hbeta)
+  stepvec <- t(ihbeta %*% gbeta)
+  step <- vtom(stepvec, nrows=nrow(ebeta))
+  step
+}
+
+step_fd <- function(ebeta, step_inputs){
+  # finite differences -- version to print time
+  bvec <- as.vector(ebeta)
+  t1 <- proc.time()
+  gbeta <- numDeriv::grad(sse_fn, bvec,  wh=step_inputs$wh, xmat=step_inputs$xmat, targets=step_inputs$targets)
+  t2 <- proc.time()
+  print(sprintf("gradient time in seconds: %.1e", (t2-t1)[3]))
+  hbeta <- numDeriv::hessian(sse_fn, bvec,  wh=step_inputs$wh, xmat=step_inputs$xmat, targets=step_inputs$targets)
+  t3 <- proc.time()
+  print(sprintf("hessian time in seconds: %.1e", (t3-t2)[3]))
+  ihbeta <- solve(hbeta)
+  t4 <- proc.time()
+  print(sprintf("inverse time in seconds: %.1e", (t4-t3)[3]))
+  stepvec <- t(ihbeta %*% gbeta)
+  step <- vtom(stepvec, nrows=nrow(ebeta))
+  step
+}
+
+
+step_adhoc <- function(ebeta, step_inputs){
+  -(1 / step_inputs$ews) * step_inputs$d %*% step_inputs$invxpx * step_inputs$step_scale
+}
+
+get_step <- function(step_method, ebeta, step_inputs){
+  step <- case_when(step_method=="adhoc" ~ step_adhoc(ebeta, step_inputs),
+                    step_method=="finite_diff" ~ step_fd(ebeta, step_inputs),
+                    TRUE ~ step_adhoc(ebeta, step_inputs))
+  step
+}
+
+jac <- function(ewhs, xmatrix){
+  # jacobian of distance vector relative to beta vector, IGNORING delta
+  x2 <- xmatrix * xmatrix
+  ddiag <- - t(ewhs) %*% x2 # note the minus sign in front
+  diag(as.vector(ddiag)) 
+}
+
+
+# solve poisson problem ----
+solve_poisson <- function(problem, maxiter=100, scale=FALSE, scale_goal=1000, step_method="adhoc", step_scale=1, tol=1e-3, start=NULL){
   t1 <- proc.time()
   
-  #.  . define indexes ----
-  n_states <- nrow(targets) # i.e., s
-  n_hh <- nrow(xmatrix) # number of households
-  n_characteristics <- ncol(xmatrix)
+  if(step_method=="adhoc") step_fn <- step_adhoc else{
+    if(step_method=="finite_diff") step_fn <- step_fd
+  }
   
-  #.  . compute scaling factors ----
-  # to scale, we MULTIPLY by these values
-  if(is.null(x_scale)) x_scale <- 1000 / sum(xmatrix) # seems to be a good default value -- scaled x will sum to 1000
-  # if(is.null(step_scale)) step_scale <- n_hh
+  init_step_scale <- step_scale
   
-  #.  . scale the problem ----
-  s_xmatrix <- xmatrix * x_scale
-  s_targets <- targets * x_scale
+  problem_unscaled <- problem
+  if(scale==TRUE) problem <- scale_problem(problem, scale_goal)
   
-  #.  . compute inverse of xprime-x matrix ----
-  #   When we calculate search direction in the loop, we will need the inverse of a derivatives matrix that
-  #   involves the xprime-x matrix. Because the inverse of matrix that has been multiplied by a non-zero scalar equals
-  #   the inverse of the scalar multiplied by inverse of the matrix, we can calculate the inverse of xprime-x once
-  #   before entering the loop. Within the loop we will multiply by the inverse of the relevant scalar (computed in the loop).
-  xpx <- t(s_xmatrix) %*% s_xmatrix
+  # unbundle the problem list and create additional variables needed
+  targets <- problem$targets
+  wh <- problem$wh
+  xmat <- problem$xmat
+  
+  xpx <- t(xmat) %*% xmat
   invxpx <- solve(xpx) # TODO: add error check and exit if not invertible
+
+  if(is.null(start)) beta0 <- matrix(0, nrow=nrow(targets), ncol=ncol(targets)) else # tpc uses 0 as beta starting point
+    beta0 <- start
+  delta0 <- get_delta(wh, beta0, xmat) # tpc uses initial delta based on initial beta 
   
-  #.  . define initial values ----
-  i_beta <- matrix(0, nrow=n_states, ncol=n_characteristics) # tpc uses 0 as beta starting point
-  i_delta <- calc_delta(hh_weights, i_beta, s_xmatrix) # tpc uses initial delta based on initial beta
+  ebeta <- beta0 # tpc uses 0 as beta starting point
+  edelta <- delta0 # tpc uses initial delta based on initial beta 
+
+  sse_vec <- rep(NA_real_, maxiter)
   
-  i_hh_state_weights <- calc_weights(i_beta, i_delta, s_xmatrix)
+  step_inputs <- list()
+  step_inputs$targets <- targets
+  step_inputs$step_scale <- step_scale
+  step_inputs$xmat <- xmat
+  step_inputs$invxpx <- invxpx
+  step_inputs$wh <- wh
   
-  i_dist <- s_targets - t(i_hh_state_weights) %*% s_xmatrix # distance from targets using initial values
-  
-  i_sse <- sum(i_dist^2) # initial sum of squared distances
-  
-  steps <- rep(step_stop, maxiter)
-  iphasein <- min(step_iter, maxiter) # 
-  steps[1:iphasein] <- seq(step_start, step_stop, length.out = iphasein)
-  
-  #.  . set estimated values used in loop to intial values, before entering loop for first time ----
-  e_beta <- i_beta
-  e_delta <- i_delta
-  
-  # begin iterations ----
-  t2 <- proc.time()
-  for(i in 1:maxiter){
-    # iterate, searching for best beta and delta coefficients for the poisson model
+  for(iter in 1:maxiter){
+    # iter <- iter + 1
+    edelta <- get_delta(wh, ebeta, xmat)
+    ewhs <- get_weights(ebeta, edelta, xmat)
+    ews <- colSums(ewhs)
+    ewh <- rowSums(ewhs)
+    step_inputs$ews <- ews
     
-    e_hh_state_weights <- calc_weights(e_beta, e_delta, s_xmatrix) # estimated weights for each household for each state
-    e_hh_weights <- rowSums(e_hh_state_weights) # estimated total weights for each households
-    e_state_weights <- colSums(e_hh_state_weights) # estimated total weights for each state
+    etargets <- t(ewhs) %*% xmat
+    d <- targets - etargets
+    step_inputs$d <- d
     
-    e_targets <- t(e_hh_state_weights) %*% s_xmatrix
-    dist <- s_targets - e_targets # distance from scaled targets
-    dist_u <- dist / x_scale
-    pdist <- ifelse(s_targets==0, 1, dist / s_targets)
-    maxdist <- max(abs(pdist)) # maximum absolute distance as a proportion of target
+    rel_err <- ifelse(targets==0, NA, abs(d / targets))
+    max_rel_err <- max(rel_err, na.rm=TRUE)
+    sse <- sum(d^2)
+    if(is.na(sse)) break # bad result, end it now, we have already saved the prior best result
     
-    sse <- sum(dist^2) # sum of squared errors
-    # print(sse)
-    # sse <- 1; sseu <- 1
-    sseu <- sse
-    sseu <- sse * (x_scale^-2) # unscaled sse
+    sse_vec[iter] <- sse
+    # sse_vec <- c(seq(200, 100, -1), NA, NA)
+    sse_rel_change <- sse_vec / lag(sse_vec) - 1
+    # iter <- 5
+    # test2 <- ifelse(iter >= 5, !any(sse_rel_change[iter - 0:2] < -.01), FALSE)
+    # test2
+    # any(sse_rel_change[c(4, 5, 6)] < -.01)
     
-    # if(sseu < 1e-6 | (sse < 1e-10 & sseu < 1e-2)) {
-    #   print(sprintf("DONE at iteration %i: scaled sse: %.5e, unscaled sse: %.5e", i, sse, sseu))
-    #   break
-    # }
+    best_sse <- min(sse_vec, na.rm=TRUE)
+    if(sse==best_sse) best_ebeta <- ebeta
+    prior_sse <- sse
     
-    if(maxdist < .001) {
-      print(sprintf("DONE at iteration %i: max error: %.5e", i, maxdist))
+    if(iter <=20 | iter %% 20 ==0) print(sprintf("iteration: %i, sse: %.5e, max_rel_err: %.5e", iter, sse, max_rel_err))
+    
+    #.. stopping criteria ---- iter <- 5
+    test1 <- max_rel_err < tol # every distance from target is within our desired error tolerance
+    # test2: none the of last 3 iterations had sse improvement of 0.1% or more
+    test2 <- ifelse(iter >= 5, !any(sse_rel_change[iter - 0:2] < -.001), FALSE)
+
+    if(test1 | test2) {
+      # exit if good
+      print(sprintf("exit at iteration: %i, sse: %.5e, max_rel_err: %.5e", iter, sse, max_rel_err))
       break
     }
     
-    if(i <= 10 | (i %% 10)==0) {
-      print(sprintf("iteration %i: scaled sse: %.5e, unscaled sse: %.5e max error: %.5e", i, sse, sseu, maxdist))
+    # if sse is > prior sse, adjust step scale downward
+    if(step_method=="adhoc" & (sse > best_sse)){
+      step_scale <- step_scale * .5
+      ebeta <- best_ebeta # reset and try again
     }
     
-    step_scale <- steps[i]
-    step <- (1 / e_state_weights) * dist %*% invxpx * step_scale # get the step (search direction)
+    prior_ebeta <- ebeta
     
-    e_beta <- e_beta + step
-    e_delta <- calc_delta(e_hh_weights, e_beta, s_xmatrix)
+    # ad hoc step
+    # step <- -(1 / ews) * d %*% invxpx * step_scale
+    step_inputs$step_scale <- step_scale
+    step <- step_fn(ebeta, step_inputs) #  * (1 - iter /maxiter) # * step_scale # * (1 - iter /maxiter)
+    # print(step)
+    
+    ebeta <- ebeta - step
   }
-  t3 <- proc.time()
-  # after we exit the loop, e_beta and e_delta have the desired coefficients
   
-  # post-loop: calculate weights and return results ----
-  f_beta <- e_beta
-  f_delta <- e_delta
-  f_hh_state_weights <- calc_weights(f_beta, f_delta, s_xmatrix)
-  f_hh_weights <- rowSums(f_hh_state_weights)
-  f_state_weights <- colSums(f_hh_state_weights)
-  f_s_targets <- t(f_hh_state_weights) %*% s_xmatrix
-  f_targets <- (t(f_hh_state_weights) %*% s_xmatrix) / x_scale
+  best_edelta <- get_delta(ewh, best_ebeta, xmat)
+  ewhs <- get_weights(best_ebeta, best_edelta, xmat)
+  ewh <- rowSums(ewhs)
+  if(scale==TRUE) etargets <- sweep(etargets, 2, problem$scale_factor, "/")
+  final_step_scale <- step_scale
   
-  result <- list()
-  result$iterations <- i
-  result$unscaled_sse <- sseu
-  
-  vars <- c("x_scale", "step_scale", "maxdist",
-            "f_beta", "f_delta",
-            "targets", "f_targets",
-            # "s_targets", "f_s_targets",
-            "hh_weights", "f_hh_weights",
-            "f_hh_state_weights",
-            "xmatrix", "s_xmatrix")
-  for(var in vars) result[[var]] <- get(var)
-  t4 <- proc.time()
-  result$total_seconds <- as.numeric((t4 - t1)[3])
-  result$iter_seconds <- as.numeric((t3 - t2)[3])
-  
-  return(result)
-}
-
-
-
-poisson_weights4 <- function(hh_weights, targets, xmatrix, maxiter=200,
-                             x_scale=NULL, 
-                             step_start, step_stop, step_iter){
-  # function to solve for state weights for each household, so that:
-  #   (a) the weights for each state follow a poisson distribution
-  #   (b) the sum of weighted values for each state, for each household characteristic, equals or comes close to
-  #       the targets, and
-  #   (c) the sum of state weights for each household equals the total national weight for that household
-  
-  #. definitions ----
-  # s prefix means a variable is the scaled version of an input variable (multiplied by a scale factor)
-  # i prefix means a variable is an initial value set before iteration
-  # e prefix means a variable is an estimate developed during iteration
-  # f prefix means a variable is the final value, after iteration
-  
-  # hh_weights:
-  #   vector of national weights (total weight for each household) -- one per household
-  
-  # targets:
-  #   matrix of targets
-  #     1 row per state
-  #     1 column per characteristic
-  
-  # xmatrix:
-  #   matrix of household characteristics (e.g., wages, interest, dividends)
-  #     1 row per household
-  #     1 column per characteristic
-  
-  
-  # scale parameters - to scale, we MULTIPLY by these values:
-  #   x_scale:      for scaling xmatrix and targets
-  #   step_scale:   for scaling the computed step size
-  
-  
-  #. initialization ----
-  t1 <- proc.time()
-  
-  #.  . define indexes ----
-  n_states <- nrow(targets) # i.e., s
-  n_hh <- nrow(xmatrix) # number of households
-  n_characteristics <- ncol(xmatrix)
-  
-  #.  . compute scaling factors ----
-  # to scale, we MULTIPLY by these values
-  # if(is.null(x_scale)) x_scale <- 1000 / sum(xmatrix) # seems to be a good default value -- scaled x will sum to 1000
-  x_scale <- ifelse(colSums(targets)==0, 1, x_scalefactor / colSums(targets))
-  # if(is.null(step_scale)) step_scale <- n_hh
-  
-  #.  . scale the problem ----
-  # s_xmatrix <- xmatrix * x_scale
-  # s_targets <- targets * x_scale
-  s_xmatrix <-sweep(xmatrix, 2, x_scale, FUN = "*") # efficient way to multiply each row of matrix by a vector
-  s_targets <- sweep(targets, 2, x_scale, FUN = "*")
-  
-  #.  . compute inverse of xprime-x matrix ----
-  #   When we calculate search direction in the loop, we will need the inverse of a derivatives matrix that
-  #   involves the xprime-x matrix. Because the inverse of matrix that has been multiplied by a non-zero scalar equals
-  #   the inverse of the scalar multiplied by inverse of the matrix, we can calculate the inverse of xprime-x once
-  #   before entering the loop. Within the loop we will multiply by the inverse of the relevant scalar (computed in the loop).
-  xpx <- t(s_xmatrix) %*% s_xmatrix
-  invxpx <- solve(xpx) # TODO: add error check and exit if not invertible
-  
-  #.  . define initial values ----
-  i_beta <- matrix(0, nrow=n_states, ncol=n_characteristics) # tpc uses 0 as beta starting point
-  i_delta <- calc_delta(hh_weights, i_beta, s_xmatrix) # tpc uses initial delta based on initial beta
-  
-  i_hh_state_weights <- calc_weights(i_beta, i_delta, s_xmatrix)
-  
-  i_dist <- s_targets - t(i_hh_state_weights) %*% s_xmatrix # distance from targets using initial values
-  
-  i_sse <- sum(i_dist^2) # initial sum of squared distances
-  
-  steps <- rep(step_stop, maxiter)
-  iphasein <- min(step_iter, maxiter) # 
-  steps[1:iphasein] <- seq(step_start, step_stop, length.out = iphasein)
-  
-  #.  . set estimated values used in loop to intial values, before entering loop for first time ----
-  e_beta <- i_beta
-  e_delta <- i_delta
-  
-  # begin iterations ----
   t2 <- proc.time()
-  for(i in 1:maxiter){
-    # iterate, searching for best beta and delta coefficients for the poisson model
-    
-    e_hh_state_weights <- calc_weights(e_beta, e_delta, s_xmatrix) # estimated weights for each household for each state
-    e_hh_weights <- rowSums(e_hh_state_weights) # estimated total weights for each households
-    e_state_weights <- colSums(e_hh_state_weights) # estimated total weights for each state
-    
-    e_targets <- t(e_hh_state_weights) %*% s_xmatrix
-    dist <- s_targets - e_targets # distance from scaled targets
-    # dist_u <- dist / x_scale
-    pdist <- ifelse(s_targets==0, 1, dist / s_targets)
-    maxdist <- max(abs(pdist)) # maximum absolute distance as a proportion of target
-    
-    sse <- sum(dist^2) # sum of squared errors
-    # print(sse)
-    # sse <- 1; sseu <- 1
-    sseu <- sse
-    # sseu <- sse * (x_scale^-2) # unscaled sse
-    
-    # if(sseu < 1e-6 | (sse < 1e-10 & sseu < 1e-2)) {
-    #   print(sprintf("DONE at iteration %i: scaled sse: %.5e, unscaled sse: %.5e", i, sse, sseu))
-    #   break
-    # }
-    
-    if(maxdist < .001) {
-      print(sprintf("DONE at iteration %i: max error: %.5e", i, maxdist))
-      break
-    }
-    
-    if(i <= 10 | (i %% 10)==0) {
-      print(sprintf("iteration %i: scaled sse: %.5e, unscaled sse: %.5e max error: %.5e", i, sse, sseu, maxdist))
-    }
-    
-    step_scale <- steps[i]
-    step <- (1 / e_state_weights) * dist %*% invxpx * step_scale # get the step (search direction)
-    
-    e_beta <- e_beta + step
-    e_delta <- calc_delta(e_hh_weights, e_beta, s_xmatrix)
-  }
-  t3 <- proc.time()
-  # after we exit the loop, e_beta and e_delta have the desired coefficients
+  total_seconds <- as.numeric((t2 - t1)[3])
   
-  # post-loop: calculate weights and return results ----
-  f_beta <- e_beta
-  f_delta <- e_delta
-  f_hh_state_weights <- calc_weights(f_beta, f_delta, s_xmatrix)
-  f_hh_weights <- rowSums(f_hh_state_weights)
-  f_state_weights <- colSums(f_hh_state_weights)
-  f_s_targets <- t(f_hh_state_weights) %*% s_xmatrix
-  f_targets <- sweep(f_s_targets, 2, x_scale, FUN="/")
+  keepnames <- c("total_seconds", "maxiter", "iter", "max_rel_err", "sse", "sse_vec", "d", "best_ebeta", "best_edelta", "ewh", "ewhs", "etargets",
+                 "problem_unscaled", "scale", "scale_goal", "init_step_scale", "final_step_scale")
   result <- list()
-  result$iterations <- i
-  result$unscaled_sse <- sseu
-  
-  vars <- c("x_scale", "step_scale", "maxdist",
-            "f_beta", "f_delta",
-            "targets", "f_targets",
-            # "s_targets", "f_s_targets",
-            "hh_weights", "f_hh_weights",
-            "f_hh_state_weights",
-            "xmatrix", "s_xmatrix")
-  for(var in vars) result[[var]] <- get(var)
-  t4 <- proc.time()
-  result$total_seconds <- as.numeric((t4 - t1)[3])
-  result$iter_seconds <- as.numeric((t3 - t2)[3])
-  
-  return(result)
+  for(var in keepnames) result[[var]] <- get(var)
+  print("all done")
+  result
 }
-
-
