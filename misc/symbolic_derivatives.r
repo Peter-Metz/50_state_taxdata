@@ -50,11 +50,18 @@ log(x)
 exp(log(x))
 
                             
-  
-                                                          
+b <- expression((t1 - x*exp(b1*x))^2 + (t2 - x*exp(b2*x))^2)
+Deriv(b, "b1")      
+
+b <- expression((t1 - x^3)^2)
+Deriv(b, "x")
+
+b <- expression((t1 - x)^2)
+Deriv(b, "x")
+
                               
                               
-                              x.h2k1*exp(b.s1k1*x.h2k1 + b.s1k2 * x.h2k2 + d.h2))^2))
+#                              x.h2k1*exp(b.s1k1*x.h2k1 + b.s1k2 * x.h2k2 + d.h2))^2))
 
 d.s1k1 <- expression((t1 - (x.h1k1*exp(b.s1k1*x.h1k1 + b.s1k2 * x.h1k2 + 
                                          log(w.h1 / exp(b.s1k1*x.h1k1 + b.s1k2*x.h1k2))) +
@@ -169,3 +176,47 @@ Deriv(d.4, "b.s2k2")
 
 d <- expression(rowSums(x))
 Deriv(d, "x")
+
+
+f <- function(x){
+  (1000 - x^3)^2
+}
+g <- function(x){
+  2 * (1000 - x^3)*(-3*x^2)
+}
+f(10)
+f(11)
+g(10)
+grad(f, 10)
+f(11) - f(10)
+f(10.001)
+
+
+# deriving bprime ----
+# delta =log(wh / sum[s] exp(betas*X))
+# b=exp(delta(h))
+# which is just b = wh / (sum[s] exp(betas*X))
+
+# bprime is deriv of b wrt a beta
+# b = wh / (sum-over-s]: exp(beta-for-given-s * x)
+b <- expression(wh / (
+  exp(b.s1k1 * x1 + b.s1k2 * x2) +
+    exp(b.s2k1 * x1 + b.s2k2 * x2) +
+    exp(b.s3k1 * x1 + b.s3k2 * x2)
+))
+Deriv(b, "b.s1k1")
+# expression({
+#   .e3 <- exp(b.s1k1 * x1 + b.s1k2 * x2)
+#   -(wh * x1 * .e3/(.e3 + exp(b.s2k1 * x1 + b.s2k2 * x2) + exp(b.s3k1 * 
+#                                                                 x1 + b.s3k2 * x2))^2)
+# })
+
+#  .e3 <- exp(b.s1k1 * x1 + b.s1k2 * x2)
+#   -(wh * x1 * .e3 / (.e3 + exp(b.s2k1 * x1 + b.s2k2 * x2) + exp(b.s3k1 * x1 + b.s3k2 * x2))^2)
+
+
+
+
+
+
+
