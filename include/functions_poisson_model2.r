@@ -147,7 +147,7 @@ get_step <- function(step_method, ebeta, step_inputs){
   step
 }
 
-jac <- function(ewhs, xmatrix){
+jac_tpc <- function(ewhs, xmatrix){
   # jacobian of distance vector relative to beta vector, IGNORING delta
   x2 <- xmatrix * xmatrix
   ddiag <- - t(ewhs) %*% x2 # note the minus sign in front
@@ -266,24 +266,9 @@ solve_poisson <- function(problem, maxiter=100, scale=FALSE, scale_goal=1000, st
   for(var in keepnames) result[[var]] <- get(var)
   print("all done")
   result
+  # end solve_poisson
 }
 
-betavec <- sval
-set.seed(1234)
-betavec <- runif(p$s*p$k)
-
-betavec <- rep(0, p$s * p$k)
-targets <- p$targets
-xmat <- p$xmat
-wh <- p$wh
-whs <- get_weights(beta, delta, xmat)
-
-# make targets that are all hit, except 1
-etargets <- t(whs) %*% xmat
-targets <- etargets
-row <- 1; col <- 1
-targets[row, col] <- etargets[row, col] + 1
-diff_vec(betavec, wh, xmat, targets)
 
 grad_sse <- function(betavec, wh, xmat, targets){
   # return gradient of the sse function wrt each beta
@@ -425,22 +410,6 @@ grad_sse <- function(betavec, wh, xmat, targets){
   graddf$grad
 }
 
-
-
-
-
-betavec <- rep(0, p$s * p$k)
-targets <- p$targets
-xmat <- p$xmat
-wh <- p$wh
-whs <- get_weights(beta, delta, xmat)
-
-# make targets that are all hit, except 1
-etargets <- t(whs) %*% xmat
-targets <- etargets
-row <- 1; col <- 1
-targets[row, col] <- etargets[row, col] + 1
-diff_vec(betavec, wh, xmat, targets)
 
 grad_sse_v2 <- function(betavec, wh, xmat, targets){
   # return gradient of the sse function wrt each beta
@@ -604,25 +573,26 @@ grad_sse_v2 <- function(betavec, wh, xmat, targets){
 }
 
 
-
-
-sval <- 1
-sval <- 0
-sval <- rep(1, p$s * p$k)
-sval <- runif(p$s*p$k)
+p <- make_problem(h=2, k=2, s=2)
+p <- make_problem(h=4, k=2, s=3) # use this
+p <- make_problem(h=20, k=4, s=8)
 
 sval <- rep(0, p$s * p$k)
-grad(sse_fn, x=sval, wh=p$wh, xmat=p$xmat, targets=p$targets)
-grad_sse(sval, wh=p$wh, xmat=p$xmat, targets=p$targets)
+# sval <- runif(p$s*p$k)
+betavec <- rep(0, p$s * p$k)
+targets <- p$targets
+xmat <- p$xmat
+wh <- p$wh
+beta <- vtom(betavec, p$s)
+delta <- get_delta(wh, beta, xmat)
+whs <- get_weights(beta, delta, xmat)
 
-
+# make targets that are all hit, except 1
 etargets <- t(whs) %*% xmat
 targets <- etargets
-
-row <- 3; col <- 1
+row <- 1; col <- 1
 targets[row, col] <- etargets[row, col] + 1
-targets
-# diff_vec(betavec, wh, xmat, targets)
+diff_vec(betavec, wh, xmat, targets)
 
 grad(sse_fn, x=sval, wh=p$wh, xmat=p$xmat, targets=targets) %>% round(4)
 grad_sse_v2(sval, wh=p$wh, xmat=p$xmat, targets=targets) %>% round(4)
@@ -631,7 +601,283 @@ jacobian(diff_vec, x=sval, wh=p$wh, xmat=p$xmat, targets=targets)
 gprime$gprime
 # the diagonal of the jacobian is right...except for the sign
 
-p <- make_problem(h=2, k=2, s=2)
-p <- make_problem(h=4, k=2, s=3)
-p <- make_problem(h=20, k=4, s=8)
+
+
+jac <- function(betavec, wh, xmat, targets){
+  # return gradient of the sse function wrt each beta
+  
+  # get the deltas as we will need them
+  beta <- vtom(betavec, nrows=nrow(targets))
+  delta <- get_delta(wh, beta, xmat)
+  
+  # make a data frame for each relevant variable, with h, k, and/or s indexes as needed
+  h <- nrow(xmat)
+  k <- ncol(xmat)
+  s <- nrow(targets)
+  
+  hstub <- tibble(h=1:h)
+  skstub <- expand_grid(s=1:s, k=1:k) %>% arrange(k, s)
+  hkstub <- expand_grid(h=1:h, k=1:k) %>% arrange(k, h)
+  
+  # we need functions that get the s or k associated with a given index
+  get_s <- function(idx) {skstub$s[idx]}
+  get_k <- function(idx) {skstub$k[idx]}
+  
+  xvec <- as.vector(xmat) # this is in the proper order 
+  xdf <- hkstub %>% mutate(x=as.vector(xmat))
+  xmat
+  diffs <- diff_vec(betavec, wh, xmat, targets)
+  
+  # create a long form of the jacobian with i indexing rows [differences],
+  # and j indexing columns [betas]
+  # each element is a partial derivative of d[i] wrt beta[j] and will depend on the h's and k's also
+  
+  irows_diff <- expand_grid(s.i=1:s, k.i=1:k) %>% 
+    arrange(k.i, s.i) %>%
+    mutate(i=row_number(), diff=diffs, beta.diff=betavec) %>%
+    select(i, s.i, k.i, diff, beta.diff)
+  
+  jcols_beta <- expand_grid(s.j=1:s, k.j=1:k) %>% 
+    arrange(k.j, s.j) %>%
+    mutate(j=row_number(), beta.pd=betavec) %>% # we'll need the beta from this iteration
+    select(j, s.j, k.j, beta.pd)
+  
+  # the long version of the jacobian
+  jlong_stub <- expand_grid(i=1:(s * k), j=1:(s * k)) %>%
+    left_join(irows_diff, by = "i") %>%
+    left_join(jcols_beta, by = "j")
+  
+  
+  get_pd <- function(df){
+    # get minus gprime(beta) partial deriviative of diff-i (diff) wrt beta-j (beta.pd)
+    
+    # where
+    #   g(beta)= weighted sum of X over hh, or sum[h] of X * exp(beta %*% X + delta[h]) where delta[h] is a function of all beta[s,k]
+    
+    #     Re-express g(beta):
+    #          = sum[h] of X * exp(beta*X) * exp(delta[h]) # involving just the beta and x needed for this target
+    #      
+    #          = sum[h]  of X * a * b where a=exp(beta *X) and b=exp(delta[h]) and delta is a function of beta
+    
+    # gprime(beta), still for a single target -- product rule gives:
+    #     gprime(beta)=sum[h] of X[k.d] * (a * bprime + b * aprime)
+    # get the x values for all households for this target
+    
+    
+    x_k <- tibble(x=xmat[, df$k.i]) # the x values for this target's k, one value per household
+    beta_s <- tibble(k=1:k, beta_s.i=beta[df$s.i, ]) # the beta values for this target's state, one value per k
+    # df <- df %>%
+    #   mutate(xsum=sum(xmat[, get_k(.$i)])) # we use x[, k] for this target thus we get i, not j
+    
+    # # a = exp(beta * x)  - this is the same for all
+    # adf_base <- xdf %>%
+    #   left_join(betadf, by="k") %>%
+    #   mutate(a_exponent=beta * x) %>% # we will raise e to this power
+    #   select(h, s, k, x, beta, a_exponent)
+    # adf_base %>% filter(h==1)
+    # 
+    # adf <- adf_base %>%
+    #   group_by(s, h) %>% # weights are specific to state and household
+    #   # we sum the k elements of the exponent and then raise e to that power
+    #   summarise(a=exp(sum(a_exponent)), .groups="drop") %>% # these are the state weights for each hh BEFORE delta impact
+    #   select(h, s, a)
+    # adf %>% filter(h==1)
+    amat <- xmat %*% t(beta) # each row has the a_exponent values, 1 per state, for a household
+    a <- exp(amat)
+    asums <- rowSums(a)
+    
+    # a <- exp(xmat %*% beta[df$s.i, ]) # one value per h, weight[h, s] calculated without delta
+    # we also need asum - the sum of a over all states for this person
+    
+    # asums <- adf %>%
+    #   group_by(h) %>%
+    #   summarise(asum=sum(a), .groups="drop")
+    # 
+    # bprimedf_base <- adf %>%
+    #   left_join(whdf, by = "h") %>%
+    #   left_join(xdf, by="h") %>%
+    #   left_join(asums, by="h") %>%
+    #   select(h, s, k, wh, x, a, asum)
+    # bprimedf_base %>% filter(h==1)
+    
+    # deriv wrt b.s1k1 =
+    #    -(wh * x[k=1] * a[s=1] / {asum^2})
+    
+    # bprime -- how much does delta for an h change wrt a change in any beta
+    # bprimedf <- bprimedf_base %>%
+    #   mutate(bprime= -(wh * x * a / {asum^2})) %>%
+    #   arrange(h, k, s)
+    
+    ab <- x_k %>%
+      left_join(df, by = character()) %>%
+      mutate(wh=wh,
+             a=a[, df$s.i], 
+             aprime=x * a,
+             b=exp(delta),
+             asum=asums,
+             bprime = -(wh * x * a / {asum^2}),
+             gprime_h = x * (a * bprime + b * aprime))
+    # beta_s %>%
+    #   left_join(df, by = character())
+    ab
+  }
+  
+  df <- jlong_stub %>% filter(i==1, j==1)
+  get_pd(df)
+  
+  
+  tmp <- jlong_stub %>%
+    filter(i %in% c(1, 4), j %in% 1) %>%
+    group_by(i, j) %>%
+    group_modify(~get_pd(.x))
+  tmp
+  tmp %>%
+    group_by(i, j) %>%
+    summarise(gprime=sum(gprime_h), .groups="drop")
+  
+
+  diffs <- diff_vec(betavec, wh, xmat, targets)
+  etargets <- etargs_vec(betavec, wh, xmat, s)
+  
+  # start making data frames
+  diffsdf <- skstub %>% 
+    mutate(target=as.vector(targets),
+           etarget=etargets,
+           diff=diffs)
+  
+  whdf <- hstub %>% mutate(wh=wh)
+  
+  betadf <- skstub %>% mutate(beta=betavec)
+  deltadf <- hstub %>% mutate(delta=delta) 
+  
+  # now that the data are set up we are ready to calculate the gradient of the sse function
+  # break the calculation into pieces using first the chain rule and then the product rule
+  
+  # sse = f(beta) = sum over targets [s,k] of (target - g(beta))^2
+  #   where g(beta[s,k]) = sum over h(ws[h] * x[h,k]) and ws[h] is the TPC formula
+  
+  # for each target, chain rule for grad, 
+  # for each beta[s,k] (where gprime is the partial of g wrt beta[s,k]):
+  # = - 2 * (target - g(beta)) * gprime(beta)
+  # = - 2 * diffs * gprime(beta[s,k])
+  
+  # for a single target[s,k]:
+  #   g(beta)= weighted sum of X over hh, or sum[h] of X * exp(beta %*% X + delta[h]) where delta[h] is a function of all beta[s,k]
+  
+  #     Re-express g(beta):
+  #          = sum[h] of X * exp(beta*X) * exp(delta[h]) # involving just the beta and x needed for this target
+  #      
+  #          = sum[h]  of X * a * b where a=exp(beta *X) and b=exp(delta[h]) and delta is a function of beta
+  
+  # gprime(beta), still for a single target -- product rule gives:
+  #     gprime(beta)=sum[h] of X * (a * bprime + b * aprime)
+  
+  # a = exp(beta * x)  - this is the same for all
+  adf_base <- xdf %>%
+    left_join(betadf, by="k") %>%
+    mutate(a_exponent=beta * x) %>% # we will raise e to this power
+    select(h, s, k, x, beta, a_exponent)
+  # adf_base %>% filter(h==1)
+  
+  adf <- adf_base %>%
+    group_by(s, h) %>% # weights are specific to state and household
+    # we sum the k elements of the exponent and then raise e to that power
+    summarise(a=exp(sum(a_exponent)), .groups="drop") %>% # these are the state weights for each hh BEFORE delta impact
+    select(h, s, a)
+  # adf %>% filter(h==1)
+  
+  #    aprime:
+  #      deriv of a=exp(beta * x) wrt beta is = x * a
+  # this is how much each hh's state weight will change if a beta changes, all else equal, BEFORE delta impact
+  # since there is a beta for each s, k combination this will vary with different x[h, k] values
+  aprimedf <- adf %>%
+    left_join(xdf, by="h") %>%
+    mutate(aprime=x * a) %>%
+    select(h, s, k, x, a, aprime) %>%
+    arrange(h, s, k)
+  # aprimedf %>% filter(h==1)
+  
+  # b = exp(delta[h])
+  bdf <- deltadf %>%
+    mutate(b=exp(delta))
+  
+  # bprime - the hardest part -- how much does delta for an h change wrt a change in any beta
+  # this is how much the delta impact will change if we change a beta - thus we have 1 per h, s, k
+  # delta =log(wh/log(sum[s] exp(betas*X))
+  # b=exp(delta(h))
+  # which is just b = wh / log(sum-over-s]: exp(beta-for-given-s * x))
+  
+  # bprime= for each h, for each beta (ie each s-k combination):
+  
+  # from symbolic differentiation we have:
+  # .e3 <- exp(b.s1k1 * x1 + b.s1k2 * x2) # which is a for a specific state -- s1 in this case
+  # .e9 <- .e3 + exp(b.s2k1 * x1 + b.s2k2 * x2) + exp(b.s3k1 * x1 + b.s3k2 * x2)
+  # so e9 <- exp(b.s1k1 * x1 + b.s1k2 * x2) + exp(b.s2k1 * x1 + b.s2k2 * x2) + exp(b.s3k1 * x1 + b.s3k2 * x2)
+  # which is just asum as calculated below
+  #  -(wh * x1 * .e3/(.e9 * log(.e9)^2))
+  
+  #  .e3 <- exp(b.s1k1 * x1 + b.s1k2 * x2)
+  #   -(wh * x1 * .e3 / (.e3 + exp(b.s2k1 * x1 + b.s2k2 * x2) + exp(b.s3k1 * x1 + b.s3k2 * x2))^2)
+  
+  # which in a, asum notation is:
+  #  -(wh * x1 * a / (asum)^2)
+  
+  # in my a, asum notation below, we have
+  # deriv wrt b.s1k1 =
+  #    -(wh * x[k=1] * a[s=1] / {asum^2})
+  
+  # for each h, get the sum of their exp(beta * x) as it is a denominator; this is in adf
+  # log(wh / colSums(beta_x)) # denominator is sum for each person
+  
+  # asum is, for each h, exp(beta-s1k1 +...+ beta-s1kn) + ...+ exp(beta-smk1 + ...+ beta-smkn)
+  # each a that we start with is exp(.) for one of the states so this the sum of exp(.) over the states
+  asums <- adf %>%
+    group_by(h) %>%
+    summarise(asum=sum(a), .groups="drop")
+  
+  bprimedf_base <- adf %>%
+    left_join(whdf, by = "h") %>%
+    left_join(xdf, by="h") %>%
+    left_join(asums, by="h") %>%
+    select(h, s, k, wh, x, a, asum)
+  # bprimedf_base %>% filter(h==1)
+  
+  # deriv wrt b.s1k1 =
+  #    -(wh * x[k=1] * a[s=1] / {asum^2})
+  
+  # bprime -- how much does delta for an h change wrt a change in any beta
+  bprimedf <- bprimedf_base %>%
+    mutate(bprime= -(wh * x * a / {asum^2})) %>%
+    arrange(h, k, s)
+  # bprimedf %>% filter(h==1)
+  
+  # now get gprime:
+  #     gprime(beta)=sum[h] of X * (a * bprime + b * aprime)
+  #  bprimedf has most of what we need
+  gprime_h <- bprimedf %>%
+    select(-a) %>% # drop a as it is also in aprime, below
+    left_join(bdf, by="h") %>%
+    left_join(aprimedf %>% select(-x), by = c("h", "s", "k")) %>% # drop x as it is in bprime
+    mutate(gprime_h= x * (a * bprime + b * aprime))
+  # gprime_h %>% filter(h==1)
+  
+  gprime <- gprime_h %>%
+    group_by(s, k) %>%
+    summarise(gprime=sum(gprime_h), .groups="drop") %>% # sum over the households h
+    arrange(k, s)
+  
+  # put it all together to get the gradient by s, k
+  # - 2 * (target - g(beta)) * gprime(beta) FOR EACH TARGET AND ADD THEM UP
+  # diffs; gprime now we need to cross each gprime with all distances
+  grad_base <- expand_grid(s.d=1:s, s.k=1:k, s.gp=1:s, k.gp=1:k) %>%
+    left_join(diffsdf %>% select(s, k, diff) %>% rename(s.d=s, s.k=k), by = c("s.d", "s.k")) %>%
+    left_join(gprime %>% select(s, k, gprime) %>% rename(s.gp=s, k.gp=k), by = c("s.gp", "k.gp")) %>%
+    mutate(grad=-2 * diff * gprime)
+  
+  graddf <- grad_base %>%
+    group_by(s.gp, k.gp) %>%
+    summarise(grad=sum(grad), .groups="drop")
+  
+  graddf$grad
+}
 
