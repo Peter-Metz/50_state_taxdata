@@ -87,7 +87,7 @@ make_acs_problem <- function(acslist, target_incgroup=2, target_vars){
   pacs$h <- nrow(xmat)
   pacs$k <- ncol(xmat)
   pacs$s <- nrow(targets)
-  pacs$x <- xmat
+  pacs$xmat <- xmat
   pacs$wh <- wh
   pacs$targets <- targets
   pacs
