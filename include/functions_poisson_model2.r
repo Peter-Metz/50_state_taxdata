@@ -598,7 +598,7 @@ grad(sse_fn, x=sval, wh=p$wh, xmat=p$xmat, targets=targets) %>% round(4)
 grad_sse_v2(sval, wh=p$wh, xmat=p$xmat, targets=targets) %>% round(4)
 
 jacobian(diff_vec, x=sval, wh=p$wh, xmat=p$xmat, targets=targets)
-gprime$gprime
+# gprime$gprime
 # the diagonal of the jacobian is right...except for the sign
 
 
@@ -649,7 +649,7 @@ jac <- function(betavec, wh, xmat, targets){
   
   
   get_pd <- function(df){
-    # get minus gprime(beta) partial deriviative of diff-i (diff) wrt beta-j (beta.pd)
+    # get minus gprime(beta) partial derivative of diff-i (diff) wrt beta-j (beta.pd, for beta used in the partial derivative)
     
     # where
     #   g(beta)= weighted sum of X over hh, or sum[h] of X * exp(beta %*% X + delta[h]) where delta[h] is a function of all beta[s,k]
@@ -881,3 +881,46 @@ jac <- function(betavec, wh, xmat, targets){
   graddf$grad
 }
 
+
+# djb - come back here! ----
+p
+# let's get J.d1b1
+# now J.d1b3
+# now J.d3b3
+irows_diff # i=d1  # for d, we're still in row 1 but now the j col will be different -- diff b
+# so idiff has s=1, k=1
+i.s <- 1; i.k <- 1
+i.s <- 1; i.k <- 2
+
+jcols_beta
+# jbeta has s=1, k=1
+# so for our 2 people we have
+j.s <- 1; j.k <- 2
+j.s <- 1; j.k <- 2
+xmat
+# A <- exp(b.s1k1*xhk1 + b.s1k2*xhk2)
+A_exponent <- xmat %*% beta[i.s, ] # (h x k) x (1 x k) # we need the beta for this difference -- its state
+A <- exp(A_exponent) # this is their weight without delta
+A
+Aprime <- xmat[, j.k] * A # element by element, 1 per person we need j.k because it is wrt b.sjkj
+Aprime
+
+# now B, which is exp(delta), where delta=ln(wh / sum[s]exp(beta[s]X))
+# B <- wh / sum[s]exp(beta[s]x)
+# we need each exp(beta[s]X) -- 2 households, 2 states
+B_exponent <- beta %*% t(xmat) # (s x k) x (k x h) = s x h
+B_exponent # s x h
+Bmat <- exp(b_exponents) # s x h
+Bmat
+
+B <- wh / colSums(Bmat) # 1 element per hh
+B <- t(t(B))
+B
+Bprime <- - wh * xmat[, j.k] * Bmat[j.s, ] / colSums(Bmat)^2
+Bprime
+
+gprimeh <- xmat[, i.k] * (A * Bprime + B * Aprime)
+gprimeh
+colSums(gprimeh)
+
+jacobian(diff_vec, x=sval, wh=p$wh, xmat=p$xmat, targets=targets)

@@ -154,6 +154,8 @@ incgroup_data <- prep_incgroup(.data=samp, .incgroup=target_incgroup, .weight=pw
 
 
 targets_df <- get_targets(targets_wide, target_vars, .pid=incgroup_data$pid, .weight_total=incgroup_data$weight_total)
+tail(targets_df)
+
 
 # CONSTRUCT initial weights ----
 #.. prepare the data we will reweight to hit (or come close to) the targets ----
@@ -214,7 +216,7 @@ opts <- list("print_level" = 0,
              # "hessian_approximation" = "limited-memory", # KEEP default of exact
              # "derivative_test" = "first-order",
              # "derivative_test_print_all" = "yes",
-             "output_file" = here::here("out", "test57.out"))
+             "output_file" = here::here("out", "test1.out"))
 
 setwd(here::here("temp1"))
 getwd()

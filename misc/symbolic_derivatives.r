@@ -216,7 +216,10 @@ Deriv(b, "b.s1k1")
 
 
 
+A <- expression(exp(b.s1k1*xk1 + b.s1k2*xk2))
+Deriv(A, "b.s1k1")
 
 
-
+B <- expression(wh / (exp(b.s1k1*xk1 + b.s1k2*xk2) + exp(b.s2k1*xk1 + b.s2k2*xk2)))
+Deriv(B, "b.s1k1")
 
