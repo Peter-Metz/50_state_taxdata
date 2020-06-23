@@ -6,6 +6,9 @@ MAINTAINER Peter Metz <pmetzdc@gmail.com>
 WORKDIR /ipopt_df
 
 COPY ./r /ipopt_df/r
+COPY ./data /ipopt_df/data
+COPY ./include /ipopt_df/include
+COPY ./out /ipopt_df/out
 
 # IPoptr envrionment directory
 ENV IPOPTR_DIR=/ipopt_df/CoinIpopt/build/Ipopt/contrib
@@ -27,7 +30,7 @@ RUN echo "$USER ALL = NOPASSWD: ALL" >> /etc/sudoers && \
     rm -rf Ipopt-3.12.13.tar && \
     mv Ipopt-3.12.13 CoinIpopt
 
-COPY ./coinhsl-2019.05.21 /ipopt_df/CoinIpopt/ThirdParty/HSL
+COPY ./coinhsl /ipopt_df/CoinIpopt/ThirdParty/HSL/coinhsl
 
 RUN cd /ipopt_df/CoinIpopt && \
 
@@ -42,8 +45,6 @@ RUN cd /ipopt_df/CoinIpopt && \
         ./get.Mumps && \
     cd ../Metis && \
         ./get.Metis && \
-    cd ../HSL && \
-        ./configure && \
 
 ##################
 # Compile ipoptr
@@ -51,7 +52,7 @@ RUN cd /ipopt_df/CoinIpopt && \
     cd ../../ && \
     mkdir build && \
     cd build && \
-    ../configure -with-pic CXXFLAGS="-fopenmp" FCFLAGS="-fopenmp" CFLAGS="-fopenmp" ADD_FFLAGS=-fPIC ADD_CFLAGS=-fPIC ADD_CXXFLAGS=-fPIC && \
+    ../configure -with-pic --enable-static LD_LIBRARY_PATH=/usr/local/lib/ CXXFLAGS="-fopenmp" FCFLAGS="-fopenmp" CFLAGS="-fopenmp" ADD_FFLAGS=-fPIC ADD_CFLAGS=-fPIC ADD_CXXFLAGS=-fPIC && \
     make -j3 && \
     make test && \
     make install && \
